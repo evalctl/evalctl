@@ -25,10 +25,9 @@ evalctl is agent-shaped.
 
 ## Status
 
-Pre-code. This repo currently holds the positioning
-([evalctl-positioning.md](evalctl-positioning.md)). v0.1 targets one code-review
-eval suite, end to end, with spoolctl and inferctl wired in — scoring agent
-behavior on real diffs, not prompt regression.
+Pre-code, spec in progress. v0.1 targets one code-review eval suite, end to
+end, with spoolctl and inferctl wired in — scoring agent behavior on real
+diffs, not prompt regression.
 
 ## Home
 
