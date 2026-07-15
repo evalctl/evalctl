@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0 - 2026-07-15
+
+Authoring and execution-replay minor release. `contract_version` remains `1`;
+the universal envelope is unchanged. Capabilities and schema hashes were
+re-pinned for additive verbs, schemas, and error-code registry entries.
+
+- Added CLI authoring verbs: `suite add`, `case add`, and `scorer add`.
+- Added `replay --failed` to re-execute failed/errored cases into a fresh
+  partial run linked by `manifest.replayed_from`.
+- Added command-scorer protocol with captured per-case verdict artifacts that
+  report/artifact replay read without re-executing scorer binaries.
+- Added per-case command-scorer failure code `E_SCORER_CASE_FAILED` with
+  `surface:"score_json"`.
+- Added schemas, capabilities, help, robot docs, and regression coverage for the
+  new v0.2 surfaces.
+
 ## 0.1.1 - 2026-07-15
 
 Contract-hardening patch. `contract_version` remains `1`.
