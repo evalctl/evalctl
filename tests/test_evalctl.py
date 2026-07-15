@@ -452,6 +452,28 @@ class EvalctlCliTests(unittest.TestCase):
             bad_id = self.run_cli(["scorer", "add", "demo", "--name", "command", "--id", "bad/id", "--argv", "python3 scorer.py", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(bad_id.stdout)["errors"][0]["code"], "E_CASE_INVALID")
 
+    def test_end_to_end_authoring_loop_without_json_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", f"{sys.executable} $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            fixture = cwd / "evals" / "suites" / "demo" / "fixtures" / "x"
+            fixture.mkdir(parents=True)
+            (fixture / "r.py").write_text(
+                "from pathlib import Path\n"
+                "import os\n"
+                "Path(os.environ['EVALCTL_OUTPUT_FILE']).write_text('ok')\n"
+            )
+            self.envelope(["case", "add", "demo", "--task", "say ok", "--workspace", "fixtures/x", "--expect-json", '{"exact":"ok"}', "--json"], cwd)
+            self.envelope(["scorer", "add", "demo", "--name", "exact", "--required", "--json"], cwd)
+            run = self.envelope(["run", "demo", "--run-id", "authored", "--json"], cwd)
+            self.assertTrue(run["data"]["run"]["ok"])
+            self.assertEqual(run["data"]["run"]["status_counts"], {"error": 0, "fail": 0, "pass": 1})
+            report = self.envelope(["report", "authored", "--format", "json"], cwd)
+            self.assertTrue(report["data"]["run"]["ok"])
+            self.assertEqual(len(report["data"]["cases"]), 1)
+            self.assertEqual(report["data"]["cases"][0]["status"], "pass")
+            self.assertTrue(report["data"]["cases"][0]["ok"])
+
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "manifest.json"
