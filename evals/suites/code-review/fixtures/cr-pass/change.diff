@@ -1,0 +1,5 @@
+--- a/src/app.py
++++ b/src/app.py
+@@ -4,4 +4,4 @@
+-print(value)
++print(value.upper())

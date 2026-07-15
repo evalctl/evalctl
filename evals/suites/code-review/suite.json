@@ -1,0 +1,43 @@
+{
+  "acknowledged_unsandboxed_runner": true,
+  "cases": "cases.jsonl",
+  "name": "code-review",
+  "runner": {
+    "argv": [
+      "python3",
+      "$EVALCTL_WORKSPACE/runner.py"
+    ],
+    "command": null,
+    "cwd": null,
+    "env_allowlist": [
+      "PATH",
+      "HOME"
+    ],
+    "max_output_bytes": 1048576,
+    "redact_env_values": [],
+    "redact_patterns": [
+      "(?i)secret[=:]\\s*\\S+",
+      "(?i)token[=:]\\s*\\S+"
+    ],
+    "shell": false,
+    "timeout_seconds": 30
+  },
+  "scorers": [
+    {
+      "name": "contains",
+      "required": true
+    },
+    {
+      "name": "exit-code",
+      "required": true
+    },
+    {
+      "name": "file-exists",
+      "required": true
+    },
+    {
+      "name": "workspace-diff",
+      "required": true
+    }
+  ]
+}

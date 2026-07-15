@@ -7,9 +7,9 @@ durable artifacts. It scores what agents actually do — files written, diffs
 produced, commands run — on your own machine, with no gateway, dashboard, or
 SaaS account.
 
-Execution can be delegated to [spoolctl](https://github.com/Ozhiaki/spoolctl)
-for crash-safe async runs; model selection can be delegated to `inferctl` for
-local-inference-stack awareness. Neither is required.
+v0.1 runs synchronously in-process and writes self-contained run directories.
+The contract leaves room for future [spoolctl](https://github.com/Ozhiaki/spoolctl)
+and `inferctl` integrations, but neither is required or implemented in v0.1.
 
 ## How it differs from promptfoo
 
@@ -20,14 +20,14 @@ evalctl is agent-shaped.
 | --- | --- | --- |
 | Unit under test | prompt → completion | agent run → files, diffs, command logs, artifacts |
 | Scoring surface | text of a response | resulting workspace: git diff, expected/forbidden file changes, exit codes, plus text |
-| Execution | in-process, synchronous | optional spoolctl: bounded concurrency, retries, dead-letter, resume failed across a crash |
-| Model context | provider API keys | optional inferctl: local backend route + preflight recorded per case |
+| Execution | in-process, synchronous | v0.1 synchronous; spoolctl async is deferred |
+| Model context | provider API keys | inferctl route/preflight provenance is deferred |
 
 ## Status
 
-Pre-code, spec in progress. v0.1 targets one code-review eval suite, end to
-end, with spoolctl and inferctl wired in — scoring agent behavior on real
-diffs, not prompt regression.
+Python implementation in progress. v0.1 targets one synchronous code-review eval
+suite end to end: scaffold, validate, run, status, report, deterministic local
+scorers, and artifact replay from a copied run directory.
 
 ## Home
 

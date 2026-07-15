@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evalctl"
+version = "0.1.0"
+description = "Local-first evals for agents, not just prompts."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "evalctl contributors"}]
+
+[project.scripts]
+evalctl = "evalctl.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["evalctl*"]
