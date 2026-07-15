@@ -111,6 +111,10 @@ class EvalctlCliTests(unittest.TestCase):
 
             existing = self.envelope(["run", "code-review", "--run-id", "r1", "--json"], cwd)
             self.assertTrue(existing["data"]["existing"])
+            self.assertEqual(existing["data"]["run_id"], "r1")
+            self.assertEqual(existing["data"]["run_dir"], "evals/runs/r1")
+            self.assertEqual(existing["data"]["run"], run["data"]["run"])
+            self.assertEqual(existing["data"]["report_hash"], original_hash)
             self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in existing["warnings"]})
 
             status = self.envelope(["status", "r1", "--json"], cwd)
@@ -149,6 +153,44 @@ class EvalctlCliTests(unittest.TestCase):
             bad_jobs = self.run_cli(["run", "code-review", "--jobs", "0", "--json"], cwd, expect=1)
             bad_jobs_payload = json.loads(bad_jobs.stdout)
             self.assertEqual(bad_jobs_payload["errors"][0]["code"], "E_CASE_INVALID")
+
+    def test_run_id_reuse_detects_semantic_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            first = self.envelope(["run", "code-review", "--run-id", "same", "--json"], cwd)
+            manifest_path = cwd / "evals" / "runs" / "same" / "manifest.json"
+            manifest_before = manifest_path.read_text()
+
+            cases = self.load_cases(cwd)
+            cases[0]["task"] = cases[0]["task"] + " Changed."
+            self.write_cases(cwd, cases)
+            conflict = self.run_cli(["run", "code-review", "--run-id", "same", "--json"], cwd, expect=5)
+            conflict_payload = json.loads(conflict.stdout)
+            self.assertEqual(conflict_payload["errors"][0]["code"], "E_RUN_CONFLICT")
+            self.assertEqual(manifest_path.read_text(), manifest_before)
+            self.assertEqual(first["data"]["report_hash"], self.envelope(["report", "same", "--format", "json"], cwd)["data"]["report_hash"])
+
+    def test_run_id_reuse_detects_case_id_rename_and_busy_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "rename", "--json"], cwd)
+            manifest_path = cwd / "evals" / "runs" / "rename" / "manifest.json"
+            manifest_before = manifest_path.read_text()
+            cases = self.load_cases(cwd)
+            cases[0]["id"] = "cr-renamed"
+            self.write_cases(cwd, cases)
+
+            conflict = self.run_cli(["run", "code-review", "--run-id", "rename", "--json"], cwd, expect=5)
+            conflict_payload = json.loads(conflict.stdout)
+            self.assertEqual(conflict_payload["errors"][0]["code"], "E_RUN_CONFLICT")
+            self.assertEqual(manifest_path.read_text(), manifest_before)
+
+            (cwd / "evals" / "runs" / "busy").mkdir()
+            busy = self.run_cli(["run", "code-review", "--run-id", "busy", "--json"], cwd, expect=4)
+            busy_payload = json.loads(busy.stdout)
+            self.assertEqual(busy_payload["errors"][0]["code"], "E_RUN_BUSY")
 
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:

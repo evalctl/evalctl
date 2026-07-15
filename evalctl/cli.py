@@ -782,8 +782,15 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     if run_dir.exists():
         manifest_path = run_dir / "manifest.json"
         if manifest_path.exists():
+            manifest_doc = read_json(manifest_path)
+            if run_identity(suite, suite_dir, cases) != manifest_identity(manifest_doc):
+                existing_count = manifest_doc["suite"]["case_count"]
+                existing_suite = manifest_doc["suite"]["name"]
+                raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed for suite `{existing_suite}`/{existing_count} cases; refusing to reuse for a different suite/case set", "use a fresh --run-id", 5)
             data = report_data(run_dir)
-            return print_envelope({"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": {"ok": data["run"]["ok"]}}, json_mode=json_mode, warnings=all_warnings, started=started)
+            run_summary = {"ok": data["run"]["ok"], "case_count": data["run"]["case_count"], "status_counts": data["run"]["status_counts"]}
+            existing = {"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": run_summary, "report_hash": data["report_hash"]}
+            return print_envelope(existing, json_mode=json_mode, warnings=all_warnings, started=started)
         raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
@@ -835,6 +842,22 @@ def status_counts(cases: list[dict[str, Any]]) -> dict[str, int]:
     for case in cases:
         counts[case["status"]] = counts.get(case["status"], 0) + 1
     return counts
+
+
+def run_identity(suite: dict[str, Any], suite_dir: Path, cases: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "suite_name": suite.get("name", suite_dir.name),
+        "suite_hash": sha256_text(stable_json(suite)),
+        "cases": sorted((case["id"], sha256_text(stable_json(case))) for case in cases),
+    }
+
+
+def manifest_identity(manifest_doc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "suite_name": manifest_doc["suite"]["name"],
+        "suite_hash": manifest_doc["suite"]["hash"],
+        "cases": sorted((case["id"], case["input_hash"]) for case in manifest_doc["cases"]),
+    }
 
 
 def resolve_run(argv: list[str]) -> Path:
