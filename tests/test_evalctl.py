@@ -393,6 +393,56 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(cases_path.read_text().splitlines()[0], first_line)
             self.assertEqual(len(cases_path.read_text().splitlines()), 2)
 
+    def test_scorer_add_appends_builtin_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            added = self.envelope(["scorer", "add", "demo", "--name", "exact", "--required", "--json"], cwd)
+            self.assertTrue(added["data"]["created"])
+            self.envelope(["validate", "demo", "--json"], cwd)
+            suite = json.loads((cwd / "evals" / "suites" / "demo" / "suite.json").read_text())
+            self.assertEqual(suite["scorers"], [{"name": "exact", "required": True}])
+            before = (cwd / "evals" / "suites" / "demo" / "suite.json").read_text()
+            existing = self.envelope(["scorer", "add", "demo", "--name", "exact", "--required", "--json"], cwd)
+            self.assertFalse(existing["data"]["created"])
+            self.assertEqual((cwd / "evals" / "suites" / "demo" / "suite.json").read_text(), before)
+
+    def test_scorer_add_command_scorer_is_usable_by_run(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", f"{sys.executable} $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            suite_dir = cwd / "evals" / "suites" / "demo"
+            fixture = suite_dir / "fixtures" / "x"
+            fixture.mkdir(parents=True)
+            (fixture / "r.py").write_text("from pathlib import Path\nimport os\nPath(os.environ['EVALCTL_OUTPUT_FILE']).write_text('ok')\n")
+            scorer_path = suite_dir / "judge.py"
+            scorer_path.write_text("import json\nprint(json.dumps({'ok': True, 'score': 1, 'label': 'pass', 'findings': []}))\n")
+            self.envelope(["case", "add", "demo", "--id", "x", "--task", "do X", "--workspace", "fixtures/x", "--json"], cwd)
+            added = self.envelope(["scorer", "add", "demo", "--name", "command", "--id", "judge1", "--argv", f"{sys.executable} {scorer_path}", "--json"], cwd)
+            self.assertTrue(added["data"]["created"])
+            run = self.envelope(["run", "demo", "--run-id", "authored-command", "--json"], cwd)
+            self.assertTrue(run["data"]["run"]["ok"])
+            self.assertTrue((cwd / "evals" / "runs" / "authored-command" / "cases" / "x" / "scorers" / "judge1.json").exists())
+
+    def test_scorer_add_conflicts_and_invalid_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            suite_path = cwd / "evals" / "suites" / "demo" / "suite.json"
+            self.envelope(["scorer", "add", "demo", "--name", "contains", "--required", "--json"], cwd)
+            before = suite_path.read_text()
+            builtin_conflict = self.run_cli(["scorer", "add", "demo", "--name", "contains", "--advisory", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(builtin_conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+            self.assertEqual(suite_path.read_text(), before)
+
+            self.envelope(["scorer", "add", "demo", "--name", "command", "--id", "judge", "--argv", "python3 scorer.py", "--json"], cwd)
+            command_conflict = self.run_cli(["scorer", "add", "demo", "--name", "command", "--id", "judge", "--argv", "python3 other.py", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(command_conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+            unknown = self.run_cli(["scorer", "add", "demo", "--name", "wat", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(unknown.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            bad_id = self.run_cli(["scorer", "add", "demo", "--name", "command", "--id", "bad/id", "--argv", "python3 scorer.py", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_id.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "manifest.json"

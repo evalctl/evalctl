@@ -26,6 +26,7 @@ CONTRACT_VERSION = 1
 TOOL = "evalctl"
 DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+BUILTIN_SCORERS = ("contains", "regex", "exact", "json-schema", "numeric-threshold", "file-exists", "exit-code", "workspace-diff")
 
 EXIT_CODES = {
     0: {"meaning": "success", "retryable": None},
@@ -792,7 +793,7 @@ def score_case(case: dict[str, Any], output_text: str, runner_json: dict[str, An
                scorers: list[dict[str, Any]], *, case_dir: Path | None = None, execute: bool = False,
                suite: dict[str, Any] | None = None, eval_env: dict[str, str] | None = None) -> list[dict[str, Any]]:
     expect = case.get("expect", {})
-    configured = scorers or [{"name": n, "required": True} for n in ("contains", "regex", "exact", "json-schema", "numeric-threshold", "file-exists", "exit-code", "workspace-diff")]
+    configured = scorers or [{"name": n, "required": True} for n in BUILTIN_SCORERS]
     out: list[dict[str, Any]] = []
     for scorer in configured:
         name = scorer["name"]
@@ -1156,6 +1157,92 @@ def command_case_add(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=json_mode, human=f"{'Added' if data['created'] else 'Exists'} case {data['id']}", started=started)
 
 
+def command_scorer_config(argv: list[str]) -> dict[str, Any]:
+    name = value_after(argv, "--name")
+    if not name:
+        raise EvalctlError("E_CASE_INVALID", "scorer add requires --name", "provide --name exact or --name command", 1)
+    if name not in set(BUILTIN_SCORERS) | {"command"}:
+        raise EvalctlError("E_CASE_INVALID", f"unknown scorer name: {name}", f"known scorers: {', '.join(BUILTIN_SCORERS)}, command", 1)
+    if has_flag(argv, "--required") and has_flag(argv, "--advisory"):
+        raise EvalctlError("E_CASE_INVALID", "--required and --advisory are mutually exclusive", "choose one scorer requirement mode", 1)
+    required = not has_flag(argv, "--advisory")
+    config: dict[str, Any] = {"name": name, "required": required}
+    if name != "command":
+        if any(value_after(argv, flag) for flag in ("--argv", "--command", "--timeout")) or has_flag(argv, "--shell"):
+            raise EvalctlError("E_CASE_INVALID", "built-in scorers do not accept command runner flags", "use --name command for external scorers", 1)
+        if value_after(argv, "--id"):
+            config["id"] = value_after(argv, "--id")
+        return config
+    scorer_id = value_after(argv, "--id")
+    if not scorer_id or not is_safe_id(scorer_id):
+        raise EvalctlError("E_CASE_INVALID", "command scorer requires a path-safe --id", "use letters, numbers, dot, underscore, or dash", 1)
+    argv_value = value_after(argv, "--argv")
+    command_value = value_after(argv, "--command")
+    if bool(argv_value) == bool(command_value):
+        raise EvalctlError("E_CASE_INVALID", "--argv and --command are mutually exclusive for command scorers", "provide exactly one command form", 1)
+    shell = has_flag(argv, "--shell")
+    if argv_value and shell:
+        raise EvalctlError("E_CASE_INVALID", "--shell requires --command, not --argv", "drop --shell or use --command", 1)
+    if command_value and not shell:
+        raise EvalctlError("E_CASE_INVALID", "--command requires --shell", "use --argv for shell:false scorers", 1)
+    config["id"] = scorer_id
+    config["shell"] = shell
+    if argv_value:
+        parsed = shlex.split(argv_value)
+        if not parsed:
+            raise EvalctlError("E_CASE_INVALID", "--argv must not be empty", "provide at least one argv token", 1)
+        config["argv"] = parsed
+    else:
+        config["command"] = command_value
+    timeout = value_after(argv, "--timeout")
+    if timeout is not None:
+        try:
+            parsed_timeout = int(timeout)
+        except ValueError:
+            raise EvalctlError("E_CASE_INVALID", f"--timeout must be an integer (got {timeout})", "provide seconds as a positive integer", 1)
+        if parsed_timeout < 1:
+            raise EvalctlError("E_CASE_INVALID", f"--timeout must be at least 1 (got {parsed_timeout})", "provide a positive timeout", 1)
+        config["timeout_seconds"] = parsed_timeout
+    return config
+
+
+def scorer_key(config: dict[str, Any]) -> tuple[str, str]:
+    if config["name"] == "command":
+        return ("command", str(config.get("id", "")))
+    return ("builtin", config["name"])
+
+
+def scorer_add_data(suite_name: str, config: dict[str, Any]) -> dict[str, Any]:
+    suite_dir = resolve_suite(suite_name)
+    suite_path = suite_dir / "suite.json"
+    suite = read_json(suite_path)
+    old_text = suite_path.read_text()
+    scorers = list(suite.get("scorers", []))
+    new_key = scorer_key(config)
+    for existing in scorers:
+        if scorer_key(existing) == new_key:
+            if stable_json(existing) == stable_json(config):
+                return {"suite": suite.get("name", suite_dir.name), "scorer": config["name"], "id": config.get("id"), "created": False}
+            raise EvalctlError("E_RUN_CONFLICT", f"scorer already exists with different config: {new_key[1]}", "choose a new id/name or edit suite.json explicitly", 5)
+    suite["scorers"] = scorers + [config]
+    write_json(suite_path, suite)
+    try:
+        validate_suite(suite_dir)
+    except Exception:
+        _atomic_write(suite_path, old_text)
+        raise
+    return {"suite": suite.get("name", suite_dir.name), "scorer": config["name"], "id": config.get("id"), "created": True}
+
+
+def command_scorer_add(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, {"--name", "--id", "--argv", "--command", "--timeout"}, {"--json", "--no-color", "--required", "--advisory", "--shell"})
+    if len(args) != 3 or args[1] != "add":
+        raise EvalctlError("E_CASE_INVALID", "scorer command requires: scorer add <suite>", "try: evalctl scorer add demo --name exact --required --json", 1)
+    data = scorer_add_data(args[2], command_scorer_config(argv))
+    label = data["id"] or data["scorer"]
+    return print_envelope(data, json_mode=json_mode, human=f"{'Added' if data['created'] else 'Exists'} scorer {label}", started=started)
+
+
 def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
                   jobs: int, timeout_override: int | None, replayed_from: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
@@ -1443,6 +1530,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_suite_add(argv, json_mode, started)
         if cmd == "case" and len(argv) > 1 and argv[1] == "add":
             return command_case_add(argv, json_mode, started)
+        if cmd == "scorer" and len(argv) > 1 and argv[1] == "add":
+            return command_scorer_add(argv, json_mode, started)
         if cmd == "run":
             return command_run(argv, json_mode, started)
         if cmd == "replay":
