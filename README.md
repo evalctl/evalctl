@@ -38,9 +38,10 @@ evalctl is agent-shaped.
 
 ## Status
 
-Python implementation in progress. v0.1 targets one synchronous code-review eval
-suite end to end: scaffold, validate, run, status, report, deterministic local
-scorers, and artifact replay from a copied run directory.
+Python pre-release. v0.1.1 hardens the synchronous local artifact contract:
+scaffold, validate, bounded parallel run execution, status, report,
+deterministic local scorers, truthful warnings/errors, real schema output, and
+artifact replay from a copied run directory. `contract_version` remains `1`.
 
 ## Home
 
