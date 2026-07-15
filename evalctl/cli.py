@@ -48,7 +48,7 @@ CODE_REGISTRY = {
     "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
     "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
     "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run"], "retryable": True, "surface": "envelope"},
-    "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init", "replay"], "retryable": False, "surface": "envelope"},
+    "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init", "replay", "suite", "case", "scorer"], "retryable": False, "surface": "envelope"},
     "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run", "replay"], "surface": "envelope"},
     "W_REPLAY_CASE_ABSENT": {"class": "warning", "where": ["replay"], "surface": "envelope"},
     "W_NOTHING_TO_REPLAY": {"class": "warning", "where": ["replay"], "surface": "envelope"},
@@ -165,6 +165,10 @@ COMMANDS:
   init [--force]                   Scaffold evals/ with code-review suite
   validate [suite] [--json]        Validate suite files
   run <suite> [--jobs N] [--timeout S] [--run-id ID] [--fail-on-fail] [--json]
+  replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
+  suite add <name> [--runner-argv ARGV|--runner-command CMD --shell] [--json]
+  case add <suite> --task TEXT --workspace PATH [--id ID] [--diff PATH] [--expect-json JSON] [--json]
+  scorer add <suite> --name NAME [--required|--advisory] [--id ID] [--argv ARGV|--command CMD --shell] [--json]
   status <run-id|--run-dir PATH> [--json]
   report <run-id|--run-dir PATH> [--format markdown|json] [--json]
 
@@ -190,13 +194,17 @@ def capabilities_data() -> dict[str, Any]:
         "init": {"description": "Scaffold evals/ tree with sample code-review suite.", "json": True, "mutates": True, "flags": ["--json", "--force"], "exit_codes": [0, 5]},
         "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
         "run": {"description": "Run a suite synchronously and produce a portable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
+        "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
+        "suite": {"description": "Author suites, including suite add.", "json": True, "mutates": True, "args": ["add", "name"], "flags": ["--json", "--runner-argv", "--runner-command", "--shell"], "exit_codes": [0, 1, 5]},
+        "case": {"description": "Author cases, including case add.", "json": True, "mutates": True, "args": ["add", "suite"], "flags": ["--json", "--task", "--workspace", "--id", "--diff", "--expect-json"], "exit_codes": [0, 1, 5]},
+        "scorer": {"description": "Author scorers, including built-in and command scorers.", "json": True, "mutates": True, "args": ["add", "suite"], "flags": ["--json", "--name", "--required", "--advisory", "--id", "--argv", "--command", "--shell", "--timeout"], "exit_codes": [0, 1, 5]},
         "status": {"description": "Diagnose run state.", "json": True, "mutates": False, "args": ["run-id"], "flags": ["--json", "--run-dir"], "exit_codes": [0, 1]},
         "report": {"description": "Generate markdown or JSON report from run artifacts.", "json": True, "mutates": False, "args": ["run-id"], "flags": ["--json", "--format", "--run-dir"], "exit_codes": [0, 1, 3]},
     }
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
@@ -268,6 +276,44 @@ DATA_SCHEMAS = {
         ["run_id", "run_dir", "run", "report_hash"],
         {"run_id": {"type": "string"}, "run_dir": {"type": "string"}, "run": RUN_SUMMARY_SCHEMA, "report_hash": {"type": "string"}, "existing": {"type": "boolean"}},
     ),
+    "replay": schema_object(
+        ["replayed_from", "cases_replayed"],
+        {
+            "replayed_from": {"type": "string"},
+            "cases_replayed": {"type": "integer", "minimum": 0},
+            "run_id": {"type": "string"},
+            "run_dir": {"type": "string"},
+            "run": RUN_SUMMARY_SCHEMA,
+            "report_hash": {"type": "string"},
+        },
+    ),
+    "suite": schema_object(
+        ["suite", "suite_dir", "created", "files"],
+        {
+            "suite": {"type": "string"},
+            "suite_dir": {"type": "string"},
+            "created": {"type": "boolean"},
+            "files": {"type": "array", "items": {"type": "string"}},
+        },
+    ),
+    "case": schema_object(
+        ["suite", "id", "created", "case"],
+        {
+            "suite": {"type": "string"},
+            "id": {"type": "string"},
+            "created": {"type": "boolean"},
+            "case": {"type": "object"},
+        },
+    ),
+    "scorer": schema_object(
+        ["suite", "scorer", "created"],
+        {
+            "suite": {"type": "string"},
+            "scorer": {"type": "string"},
+            "id": {"type": ["string", "null"]},
+            "created": {"type": "boolean"},
+        },
+    ),
     "status": schema_object(
         ["run_id", "run_dir", "run", "cases", "recommended_action"],
         {
@@ -327,15 +373,31 @@ Inspect: `evalctl status <run-id> --json`
 Report: `evalctl report <run-id> --format json`
 Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 
-## v0.1 workflow
+## v0.2 workflow
 
 1. Scaffold `evals/suites/code-review/` with `evalctl init`.
-2. Edit `suite.json`, `cases.jsonl`, and fixtures by hand.
+2. Or author a new suite without hand-editing JSON:
+   `evalctl suite add demo --runner-argv "python3 $EVALCTL_WORKSPACE/r.py" --json`;
+   create fixtures; `evalctl case add demo --task "..." --workspace fixtures/x --json`;
+   `evalctl scorer add demo --name exact --required --json`.
 3. Run `evalctl validate <suite> --json` before executing local code.
 4. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
 5. Use `status` for run state and recommended next command.
 6. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
-7. Copy a run directory anywhere and run `report --run-dir <path> --format json`; v0.1 recomputes deterministic scorers from artifacts and does not invoke the runner.
+7. Copy a run directory anywhere and run `report --run-dir <path> --format json`; evalctl recomputes scores from artifacts and does not invoke the runner.
+8. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
+   to re-execute only failed/errored cases into a fresh partial run. `replay --run-id`
+   names the destination run, not the source.
+
+## Command scorers
+
+`evalctl scorer add <suite> --name command --id judge1 --argv "python3 scorer.py"`
+adds an external scorer. A command scorer receives `EVALCTL_CASE_FILE`,
+`EVALCTL_OUTPUT_FILE`, and `EVALCTL_WORKSPACE`, emits one JSON verdict, and is executed
+once at run time. Its normalized verdict is stored under
+`cases/<case_id>/scorers/<id>.json`; reports and artifact replay read that artifact and
+never re-execute the scorer binary. Command scorers execute arbitrary local code and are
+covered by the same unsandboxed warning as runners.
 
 ## Exit-code branching
 
@@ -345,9 +407,12 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 
 Codes with `surface:"envelope"` appear in `errors[]` or `warnings[]` and predict
 the command's process-exit class. Codes with `surface:"runner_json"` appear as
-per-case `runner.json.error_code` reason codes. A runner timeout or spawn failure
-is reportable case data: `run` exits 0 by default, exits 6 with `--fail-on-fail`,
-emits `W_PARTIAL_RUN`, and does not put the runner reason code in `errors[]`.
+per-case `runner.json.error_code` reason codes. Codes with `surface:"score_json"`
+appear as per-case scorer verdict reason codes, for example
+`E_SCORER_CASE_FAILED` in `cases/<id>/scorers/<scorer_id>.json` or `score.json`.
+A runner timeout, runner spawn failure, or command-scorer failure is reportable
+case data: `run`/`replay` exits 0 by default, exits 6 with `--fail-on-fail`, emits
+`W_PARTIAL_RUN`, and does not put the per-case reason code in `errors[]`.
 
 ## Artifact writes
 
@@ -358,7 +423,8 @@ guarantee; v0.1.1 does not fsync files or directories.
 
 ## Deferred
 
-Async queueing, crash resume, execution replay, compare, command scorers, mutating suite/case/scorer add verbs, inferctl route capture, and LLM-as-judge scoring are roadmap items, not v0.1 commands.
+Async queueing, crash resume, compare, inferctl route capture, and LLM-as-judge
+scoring are roadmap items, not v0.2 commands.
 """
 
 

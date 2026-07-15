@@ -88,12 +88,16 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:a044988b5d109a5dc2fe29a744bfcc5827b9e4591a3a297c945164284f66ad65")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:9b0c191821183aae2791b2c861c1cfb3e9247eb2d44035058dffc55815b904c4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": True})
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_FAILED"]["surface"], "runner_json")
-            self.assertIn("run", caps["data"]["verbs"])
+            self.assertEqual(caps["data"]["error_codes"]["E_SCORER_CASE_FAILED"]["surface"], "score_json")
+            self.assertIn("replay", caps["data"]["error_codes"]["E_SCORER_CASE_FAILED"]["where"])
+            self.assertIn("replay", caps["data"]["error_codes"]["W_UNSANDBOXED_RUNNER"]["where"])
+            for verb in ("run", "replay", "suite", "case", "scorer"):
+                self.assertIn(verb, caps["data"]["verbs"])
             schema = self.envelope(["schema", "run", "--json"], cwd)
             self.assertTrue(schema["ok"])
             self.assertEqual(schema["meta"]["data_hash"], "sha256:668cfa4ab24174f7e3187f7e011be060f50e3197d92564a53b807d151bc7e5d6")
@@ -104,15 +108,20 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(run_schema["additionalProperties"])
 
             all_schemas = self.envelope(["schema", "--json"], cwd)
-            for verb in ("capabilities", "schema", "init", "validate", "run", "status", "report"):
+            for verb in ("capabilities", "schema", "init", "validate", "run", "replay", "suite", "case", "scorer", "status", "report"):
                 verb_schema = all_schemas["data"]["schemas"][verb]
                 self.assertIn("properties", verb_schema)
                 self.assertIn("required", verb_schema)
                 self.assertTrue(verb_schema["additionalProperties"])
+            for verb in ("replay", "suite", "case", "scorer"):
+                single_schema = self.envelope(["schema", verb, "--json"], cwd)
+                self.assertIn(verb, single_schema["data"]["schemas"])
+                self.assertTrue(single_schema["data"]["schemas"][verb]["additionalProperties"])
 
             docs = self.run_cli(["robot-docs", "guide"], cwd)
             self.assertIn('surface:"runner_json"', docs.stdout)
-            self.assertIn("does not put the runner reason code in `errors[]`", docs.stdout)
+            self.assertIn('surface:"score_json"', docs.stdout)
+            self.assertIn("does not put the per-case reason code in `errors[]`", docs.stdout)
 
     def test_init_validate_run_status_report_and_artifact_replay(self) -> None:
         with tempfile.TemporaryDirectory() as td:
