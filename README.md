@@ -9,19 +9,32 @@ SaaS account.
 
 v0.1 runs synchronously in-process and writes self-contained run directories.
 The contract leaves room for future [spoolctl](https://github.com/Ozhiaki/spoolctl)
-and `inferctl` integrations, but neither is required or implemented in v0.1.
+and [inferctl](https://inferctl.dev) integrations, but neither is required or
+implemented in v0.1.
 
-## How it differs from promptfoo
+## About
 
-promptfoo is the incumbent local eval CLI, and it is prompt/chat-shaped.
+evalctl is an agent-first evaluation harness for local workflows. It runs eval
+cases as filesystem fixtures, invokes agents through ordinary runner commands,
+and grades the resulting workspace with deterministic scorers. The core artifact
+is a portable run directory that another agent can inspect, report on, and
+re-score without access to the original shell history.
+
+Keywords: agent evals, LLM evaluation, AI agents, local-first, CLI, code review,
+workspace diff, deterministic scoring, artifact replay, eval harness.
+
+## How it differs from [promptfoo](https://www.promptfoo.dev/)
+
+[promptfoo](https://www.promptfoo.dev/) is the incumbent local eval CLI, and it
+is prompt/chat-shaped.
 evalctl is agent-shaped.
 
-| Axis | promptfoo | evalctl |
+| Axis | [promptfoo](https://www.promptfoo.dev/) | evalctl |
 | --- | --- | --- |
 | Unit under test | prompt → completion | agent run → files, diffs, command logs, artifacts |
 | Scoring surface | text of a response | resulting workspace: git diff, expected/forbidden file changes, exit codes, plus text |
 | Execution | in-process, synchronous | v0.1 synchronous; spoolctl async is deferred |
-| Model context | provider API keys | inferctl route/preflight provenance is deferred |
+| Model context | provider API keys | [inferctl](https://inferctl.dev) route/preflight provenance is deferred |
 
 ## Status
 
@@ -31,5 +44,5 @@ scorers, and artifact replay from a copied run directory.
 
 ## Home
 
-- Site: evalctl.dev
-- Org: https://github.com/evalctl
+- Site: [evalctl.dev](https://evalctl.dev)
+- Org: [github.com/evalctl](https://github.com/evalctl)
