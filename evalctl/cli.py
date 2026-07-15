@@ -586,6 +586,20 @@ def validate_suite_name(name: str) -> None:
         raise EvalctlError("E_CASE_INVALID", f"invalid suite name: {name}", "use a simple name with letters, numbers, dot, underscore, or dash", 1)
 
 
+def normalize_suite_rel(raw: str, *, field: str) -> str:
+    if not raw:
+        raise EvalctlError("E_CASE_INVALID", f"{field} must not be empty", f"provide {field}", 1)
+    if "\\" in raw:
+        raise EvalctlError("E_CASE_INVALID", f"{field} must use POSIX-style relative paths", "use forward slashes and stay under the suite directory", 1)
+    path = PurePosixPath(raw)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
+        raise EvalctlError("E_CASE_INVALID", f"{field} must stay under the suite directory", "use a relative path without ..", 1)
+    normalized = path.as_posix()
+    if normalized in {"", "."}:
+        raise EvalctlError("E_CASE_INVALID", f"{field} must name a path", f"provide {field}", 1)
+    return normalized
+
+
 def decode_subprocess_output(value: str | bytes | None) -> str:
     if value is None:
         return ""
@@ -1082,6 +1096,66 @@ def command_suite_add(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=json_mode, human=f"{'Created' if data['created'] else 'Exists'} suite {data['suite']}", started=started)
 
 
+def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: str | None = None,
+                  diff_raw: str | None = None, expect_raw: str | None = None) -> dict[str, Any]:
+    suite_dir = resolve_suite(suite_name)
+    suite = read_json(suite_dir / "suite.json")
+    workspace = normalize_suite_rel(workspace_raw, field="--workspace")
+    if not (suite_dir / workspace).exists():
+        raise EvalctlError("E_CASE_INVALID", f"workspace missing: {workspace}", "create the fixture before adding the case", 1)
+    case: dict[str, Any] = {"task": task, "workspace": workspace}
+    if diff_raw:
+        diff = normalize_suite_rel(diff_raw, field="--diff")
+        if not (suite_dir / diff).exists():
+            raise EvalctlError("E_CASE_INVALID", f"diff missing: {diff}", "create the diff file before adding the case", 1)
+        case["diff"] = diff
+    if expect_raw:
+        try:
+            expect = json.loads(expect_raw)
+        except json.JSONDecodeError as exc:
+            raise EvalctlError("E_CASE_INVALID", f"--expect-json is invalid JSON: {exc.msg}", "provide a JSON object such as '{\"exact\":\"ok\"}'", 1)
+        if not isinstance(expect, dict):
+            raise EvalctlError("E_CASE_INVALID", "--expect-json must be a JSON object", "provide scorer expectations as an object", 1)
+        case["expect"] = expect
+    final_id = case_id or sha256_text(stable_json(case))[7:19]
+    if not is_safe_id(final_id):
+        raise EvalctlError("E_CASE_INVALID", f"invalid case id: {final_id}", "use a path-safe id", 1)
+    case["id"] = final_id
+    cases_path = suite_dir / suite.get("cases", "cases.jsonl")
+    existing_cases = load_cases(cases_path)
+    for existing in existing_cases:
+        if existing["id"] == final_id:
+            if stable_json(existing) == stable_json(case):
+                return {"suite": suite.get("name", suite_dir.name), "id": final_id, "created": False, "case": case}
+            raise EvalctlError("E_RUN_CONFLICT", f"case id already exists with different content: {final_id}", "choose a new --id or edit cases.jsonl explicitly", 5)
+    old_text = cases_path.read_text()
+    new_text = old_text
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    new_text += stable_json(case) + "\n"
+    _atomic_write(cases_path, new_text)
+    try:
+        validate_suite(suite_dir)
+    except Exception:
+        _atomic_write(cases_path, old_text)
+        raise
+    return {"suite": suite.get("name", suite_dir.name), "id": final_id, "created": True, "case": case}
+
+
+def command_case_add(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, {"--task", "--workspace", "--id", "--diff", "--expect-json"}, {"--json", "--no-color"})
+    if len(args) != 3 or args[1] != "add":
+        raise EvalctlError("E_CASE_INVALID", "case command requires: case add <suite>", "try: evalctl case add demo --task \"do X\" --workspace fixtures/x --json", 1)
+    task = value_after(argv, "--task")
+    workspace = value_after(argv, "--workspace")
+    if not task:
+        raise EvalctlError("E_CASE_INVALID", "case add requires --task", "provide --task text", 1)
+    if not workspace:
+        raise EvalctlError("E_CASE_INVALID", "case add requires --workspace", "provide --workspace fixtures/name", 1)
+    data = case_add_data(args[2], task, workspace, case_id=value_after(argv, "--id"), diff_raw=value_after(argv, "--diff"), expect_raw=value_after(argv, "--expect-json"))
+    return print_envelope(data, json_mode=json_mode, human=f"{'Added' if data['created'] else 'Exists'} case {data['id']}", started=started)
+
+
 def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
                   jobs: int, timeout_override: int | None, replayed_from: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
@@ -1367,6 +1441,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_validate(argv, json_mode, started)
         if cmd == "suite" and len(argv) > 1 and argv[1] == "add":
             return command_suite_add(argv, json_mode, started)
+        if cmd == "case" and len(argv) > 1 and argv[1] == "add":
+            return command_case_add(argv, json_mode, started)
         if cmd == "run":
             return command_run(argv, json_mode, started)
         if cmd == "replay":

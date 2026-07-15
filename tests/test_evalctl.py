@@ -343,6 +343,56 @@ class EvalctlCliTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_case_add_appends_valid_case_and_is_idempotent_without_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            fixture = cwd / "evals" / "suites" / "demo" / "fixtures" / "x"
+            fixture.mkdir(parents=True)
+            added = self.envelope(["case", "add", "demo", "--task", "do X", "--workspace", "fixtures/x", "--expect-json", '{"exact":"ok"}', "--json"], cwd)
+            case_id = added["data"]["id"]
+            self.assertTrue(added["data"]["created"])
+            valid = self.envelope(["validate", "demo", "--json"], cwd)
+            self.assertEqual(valid["data"]["case_count"], 1)
+            cases_path = cwd / "evals" / "suites" / "demo" / "cases.jsonl"
+            first_text = cases_path.read_text()
+            case = json.loads(first_text.strip())
+            self.assertEqual(case["id"], case_id)
+            self.assertEqual(case["expect"], {"exact": "ok"})
+
+            existing = self.envelope(["case", "add", "demo", "--task", "do X", "--workspace", "fixtures/x", "--expect-json", '{"exact":"ok"}', "--json"], cwd)
+            self.assertFalse(existing["data"]["created"])
+            self.assertEqual(existing["data"]["id"], case_id)
+            self.assertEqual(cases_path.read_text(), first_text)
+
+            conflict = self.run_cli(["case", "add", "demo", "--id", case_id, "--task", "changed", "--workspace", "fixtures/x", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+
+    def test_case_add_rejects_bad_workspace_paths_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            cases_path = cwd / "evals" / "suites" / "demo" / "cases.jsonl"
+            before = cases_path.read_text()
+            for bad_path in ("../x", str(cwd / "outside"), "fixtures/missing"):
+                result = self.run_cli(["case", "add", "demo", "--task", "do X", "--workspace", bad_path, "--json"], cwd, expect=1)
+                self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+                self.assertEqual(cases_path.read_text(), before)
+
+    def test_case_add_preserves_unrelated_case_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            suite_dir = cwd / "evals" / "suites" / "demo"
+            (suite_dir / "fixtures" / "one").mkdir(parents=True)
+            (suite_dir / "fixtures" / "two").mkdir(parents=True)
+            self.envelope(["case", "add", "demo", "--id", "one", "--task", "one", "--workspace", "fixtures/one", "--json"], cwd)
+            cases_path = suite_dir / "cases.jsonl"
+            first_line = cases_path.read_text().splitlines()[0]
+            self.envelope(["case", "add", "demo", "--id", "two", "--task", "two", "--workspace", "fixtures/two", "--json"], cwd)
+            self.assertEqual(cases_path.read_text().splitlines()[0], first_line)
+            self.assertEqual(len(cases_path.read_text().splitlines()), 2)
+
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "manifest.json"
