@@ -32,20 +32,20 @@ EXIT_CODES = {
 }
 
 CODE_REGISTRY = {
-    "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False},
-    "E_SCHEMA_VIOLATION": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False},
-    "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False},
-    "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report"], "retryable": False},
-    "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None},
-    "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None},
-    "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None},
-    "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run"], "retryable": True},
-    "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init"], "retryable": False},
-    "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run"]},
-    "W_TEXT_DIFF_APPROXIMATED": {"class": "warning", "where": ["run"]},
-    "W_OUTPUT_TRUNCATED": {"class": "warning", "where": ["run"]},
-    "W_PATH_UNREADABLE": {"class": "warning", "where": ["run"]},
-    "W_PARTIAL_RUN": {"class": "warning", "where": ["run", "report"]},
+    "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
+    "E_SCHEMA_VIOLATION": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
+    "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False, "surface": "envelope"},
+    "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report"], "retryable": False, "surface": "envelope"},
+    "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
+    "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
+    "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
+    "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run"], "retryable": True, "surface": "envelope"},
+    "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init"], "retryable": False, "surface": "envelope"},
+    "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run"], "surface": "envelope"},
+    "W_TEXT_DIFF_APPROXIMATED": {"class": "warning", "where": ["run"], "surface": "envelope"},
+    "W_OUTPUT_TRUNCATED": {"class": "warning", "where": ["run"], "surface": "envelope"},
+    "W_PATH_UNREADABLE": {"class": "warning", "where": ["run"], "surface": "envelope"},
+    "W_PARTIAL_RUN": {"class": "warning", "where": ["run", "report"], "surface": "envelope"},
 }
 
 
@@ -257,6 +257,14 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 ## Exit-code branching
 
 `0` success, `1` input error, `2` safety block, `3` tool environment error, `4` retryable transient, `5` conflict, `6` eval failure from `run --fail-on-fail`.
+
+## Error-code surfaces
+
+Codes with `surface:"envelope"` appear in `errors[]` or `warnings[]` and predict
+the command's process-exit class. Codes with `surface:"runner_json"` appear as
+per-case `runner.json.error_code` reason codes. A runner timeout or spawn failure
+is reportable case data: `run` exits 0 by default, exits 6 with `--fail-on-fail`,
+emits `W_PARTIAL_RUN`, and does not put the runner reason code in `errors[]`.
 
 ## Deferred
 
@@ -523,7 +531,8 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
     output_file.write_text(output_text)
     (case_dir / "runner.stdout.txt").write_text(stdout)
     (case_dir / "runner.stderr.txt").write_text(stderr)
-    runner_json = {"exit_code": exit_code, "signal": signal_value, "timed_out": timed_out, "spawn_failed": spawn_failed, "duration_ms": duration_ms,
+    error_code = "E_RUNNER_TIMEOUT" if timed_out else "E_RUNNER_FAILED" if spawn_failed else None
+    runner_json = {"exit_code": exit_code, "signal": signal_value, "timed_out": timed_out, "spawn_failed": spawn_failed, "error_code": error_code, "duration_ms": duration_ms,
                    "stdout_truncated": trunc_stdout, "stderr_truncated": trunc_stderr, "output_truncated": False,
                    "stdout_redacted": red_stdout, "stderr_redacted": red_stderr, "output_redacted": red_output}
     if trunc_stdout or trunc_stderr:
