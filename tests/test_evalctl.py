@@ -364,6 +364,31 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(report["data"]["report_hash"], run["data"]["report_hash"])
             self.assertTrue(report["data"]["run"]["ok"])
 
+    def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
+        if os.name == "nt":
+            self.skipTest("raw non-UTF-8 path fixture is POSIX-only")
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            suite = self.load_suite(cwd)
+            suite["scorers"] = [{"name": "exit-code", "required": True}]
+            self.write_suite(cwd, suite)
+            workspace = self.suite_path(cwd) / "fixtures" / "cr-pass"
+            try:
+                os.mkdir(os.fsencode(workspace) + b"/\xff")
+            except Exception as exc:
+                self.skipTest(f"filesystem does not allow raw non-UTF-8 fixture: {exc}")
+
+            run = self.envelope(["run", "code-review", "--run-id", "bad-path", "--json"], cwd)
+            self.assertTrue(run["data"]["run"]["ok"])
+            path_warnings = [w for w in run["warnings"] if w["code"] == "W_PATH_UNREADABLE"]
+            self.assertTrue(path_warnings)
+            self.assertTrue(any("\ufffd" in w["message"] for w in path_warnings))
+            before = json.loads((cwd / "evals" / "runs" / "bad-path" / "cases" / "cr-pass" / "workspace-before.json").read_text())
+            paths = {entry["path"] for entry in before["entries"]}
+            self.assertFalse(any("\ufffd" in path for path in paths))
+
     def test_jobs_parallelize_and_preserve_normalized_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)

@@ -403,13 +403,18 @@ def normalize_rel(path: Path, root: Path) -> str:
     posix = PurePosixPath(*parts).as_posix()
     if posix in ("", ".") or ".." in parts:
         raise ValueError("invalid relative path")
+    posix.encode("utf-8", "strict")
     return posix
+
+
+def display_path_name(path: Path) -> str:
+    return os.fsencode(path.name).decode("utf-8", "replace")
 
 
 def manifest(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     warnings: list[dict[str, Any]] = []
     entries: list[dict[str, Any]] = []
-    for path in sorted(root.rglob("*"), key=lambda p: normalize_rel(p, root)):
+    for path in sorted(root.rglob("*"), key=os.fsencode):
         try:
             rel = normalize_rel(path, root)
             st = path.lstat()
@@ -424,7 +429,7 @@ def manifest(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 subtype = "fifo" if stat.S_ISFIFO(st.st_mode) else "socket" if stat.S_ISSOCK(st.st_mode) else "device" if stat.S_ISCHR(st.st_mode) or stat.S_ISBLK(st.st_mode) else "unknown"
                 entries.append({"path": rel, "kind": "other", "subtype": subtype})
         except Exception as exc:
-            warnings.append({"code": "W_PATH_UNREADABLE", "message": f"could not read path {path.name}: {exc}"})
+            warnings.append({"code": "W_PATH_UNREADABLE", "message": f"could not read path {display_path_name(path)}: {exc}"})
     return {"root": ".", "entries": entries}, warnings
 
 
