@@ -23,13 +23,13 @@ re-score without access to the original shell history.
 Keywords: agent evals, LLM evaluation, AI agents, local-first, CLI, code review,
 workspace diff, deterministic scoring, artifact replay, eval harness.
 
-## How it differs from [promptfoo](https://www.promptfoo.dev/)
+## How it differs from promptfoo
 
 [promptfoo](https://www.promptfoo.dev/) is the incumbent local eval CLI, and it
 is prompt/chat-shaped.
 evalctl is agent-shaped.
 
-| Axis | [promptfoo](https://www.promptfoo.dev/) | evalctl |
+| Axis | promptfoo | evalctl |
 | --- | --- | --- |
 | Unit under test | prompt → completion | agent run → files, diffs, command logs, artifacts |
 | Scoring surface | text of a response | resulting workspace: git diff, expected/forbidden file changes, exit codes, plus text |
