@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,30 @@ class EvalctlCliTests(unittest.TestCase):
     def envelope(self, args: list[str], cwd: Path, expect: int = 0) -> dict:
         result = self.run_cli(args, cwd, expect)
         return json.loads(result.stdout)
+
+    def run_cli_with_controlling_tty(self, args: list[str], cwd: Path, expect: int = 0) -> str:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(cwd)
+            os.execvpe(CMD[0], CMD + args, env)
+        output = b""
+        try:
+            while True:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                output += chunk
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+        _, status = os.waitpid(pid, 0)
+        code = os.waitstatus_to_exitcode(status)
+        text = output.decode("utf-8", "replace")
+        self.assertEqual(code, expect, msg=text)
+        return text
 
     def suite_path(self, cwd: Path) -> Path:
         return cwd / "evals" / "suites" / "code-review"
@@ -71,8 +96,13 @@ class EvalctlCliTests(unittest.TestCase):
             run = self.envelope(["run", "code-review", "--run-id", "r1", "--json"], cwd)
             self.assertFalse(run["data"]["run"]["ok"])
             self.assertEqual(run["data"]["run"]["status_counts"], {"error": 0, "fail": 1, "pass": 1})
+            self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in run["warnings"]})
             original_hash = run["data"]["report_hash"]
             self.assertEqual(original_hash, "sha256:89f6dee9ee258d67c8d868bd4edbf7b0d90af0012cdab31b35ca030717bac88e")
+
+            existing = self.envelope(["run", "code-review", "--run-id", "r1", "--json"], cwd)
+            self.assertTrue(existing["data"]["existing"])
+            self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in existing["warnings"]})
 
             status = self.envelope(["status", "r1", "--json"], cwd)
             self.assertEqual(status["data"]["recommended_action"]["command"], "evalctl report --run-dir evals/runs/r1 --format json")
@@ -115,6 +145,24 @@ class EvalctlCliTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertTrue(payload["ok"])
             self.assertFalse(payload["data"]["run"]["ok"])
+
+    def test_unsandboxed_warning_stderr_only_when_unacknowledged_tty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            acknowledged = self.run_cli(["run", "code-review", "--run-id", "ack", "--json"], cwd)
+            ack_payload = json.loads(acknowledged.stdout)
+            self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in ack_payload["warnings"]})
+            self.assertEqual(acknowledged.stderr, "")
+
+            suite = self.load_suite(cwd)
+            suite["acknowledged_unsandboxed_runner"] = False
+            self.write_suite(cwd, suite)
+
+            unack_output = self.run_cli_with_controlling_tty(["run", "code-review", "--run-id", "unack", "--json"], cwd)
+            unack_payload = json.loads([line for line in unack_output.splitlines() if line.startswith("{")][-1])
+            self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in unack_payload["warnings"]})
+            self.assertIn("runner commands execute arbitrary local code", unack_output)
 
     def test_runner_timeout_is_reportable_case_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:

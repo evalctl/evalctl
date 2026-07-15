@@ -680,19 +680,19 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     validate_suite(suite_dir)
     suite = read_json(suite_dir / "suite.json")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+    all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
+    if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
+        print(all_warnings[0]["message"], file=sys.stderr)
     run_id = value_after(argv, "--run-id") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ-") + suite.get("name", suite_dir.name)
     run_dir = Path("evals") / "runs" / run_id
     if run_dir.exists():
         manifest_path = run_dir / "manifest.json"
         if manifest_path.exists():
             data = report_data(run_dir)
-            return print_envelope({"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": {"ok": data["run"]["ok"]}}, json_mode=json_mode, started=started)
+            return print_envelope({"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": {"ok": data["run"]["ok"]}}, json_mode=json_mode, warnings=all_warnings, started=started)
         raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
-    all_warnings = [] if suite.get("acknowledged_unsandboxed_runner") else [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
-    if all_warnings and sys.stderr.isatty():
-        print(all_warnings[0]["message"], file=sys.stderr)
     timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
     case_entries = []
     for case in sorted(cases, key=lambda c: c["id"]):
