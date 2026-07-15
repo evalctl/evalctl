@@ -88,8 +88,19 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("run", caps["data"]["verbs"])
             schema = self.envelope(["schema", "run", "--json"], cwd)
             self.assertTrue(schema["ok"])
-            self.assertEqual(schema["meta"]["data_hash"], "sha256:b959ad53a3609dfbf03e8026a4709be835766b44d4e00f08ecfba70bc6c4f30b")
+            self.assertEqual(schema["meta"]["data_hash"], "sha256:668cfa4ab24174f7e3187f7e011be060f50e3197d92564a53b807d151bc7e5d6")
             self.assertIn("run", schema["data"]["schemas"])
+            run_schema = schema["data"]["schemas"]["run"]
+            self.assertIn("properties", run_schema)
+            self.assertIn("required", run_schema)
+            self.assertTrue(run_schema["additionalProperties"])
+
+            all_schemas = self.envelope(["schema", "--json"], cwd)
+            for verb in ("capabilities", "schema", "init", "validate", "run", "status", "report"):
+                verb_schema = all_schemas["data"]["schemas"][verb]
+                self.assertIn("properties", verb_schema)
+                self.assertIn("required", verb_schema)
+                self.assertTrue(verb_schema["additionalProperties"])
 
             docs = self.run_cli(["robot-docs", "guide"], cwd)
             self.assertIn('surface:"runner_json"', docs.stdout)

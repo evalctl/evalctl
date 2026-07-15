@@ -210,6 +210,79 @@ def capabilities_data() -> dict[str, Any]:
     }
 
 
+def schema_object(required: list[str], properties: dict[str, Any], *, additional: bool = True) -> dict[str, Any]:
+    return {"type": "object", "required": required, "properties": properties, "additionalProperties": additional}
+
+
+RUN_SUMMARY_SCHEMA = schema_object(
+    ["ok", "case_count", "status_counts"],
+    {
+        "ok": {"type": "boolean"},
+        "case_count": {"type": "integer", "minimum": 0},
+        "status_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    },
+)
+
+DATA_SCHEMAS = {
+    "capabilities": schema_object(
+        ["tool_name", "contract_version", "features", "verbs", "global_flags", "exit_codes", "error_codes", "env_vars", "integrations", "schemas_uri", "robot_docs_uri"],
+        {
+            "tool_name": {"type": "string"},
+            "contract_version": {"type": "integer"},
+            "features": {"type": "array", "items": {"type": "string"}},
+            "verbs": {"type": "object", "additionalProperties": {"type": "object"}},
+            "global_flags": {"type": "object", "additionalProperties": {"type": "string"}},
+            "exit_codes": {"type": "object", "additionalProperties": {"type": "object"}},
+            "error_codes": {"type": "object", "additionalProperties": schema_object(["class", "where", "surface"], {"class": {"type": "string"}, "exit": {"type": "integer"}, "where": {"type": "array", "items": {"type": "string"}}, "retryable": {"type": ["boolean", "null"]}, "surface": {"type": "string"}})},
+            "env_vars": {"type": "object", "additionalProperties": {"type": "string"}},
+            "integrations": {"type": "object", "additionalProperties": {"type": "object"}},
+            "schemas_uri": {"type": "string"},
+            "robot_docs_uri": {"type": "string"},
+        },
+    ),
+    "schema": schema_object(
+        ["envelope_schema", "schemas", "definitions"],
+        {
+            "envelope_schema": {"type": "object"},
+            "schemas": {"type": "object", "additionalProperties": {"type": "object"}},
+            "definitions": {"type": "object"},
+        },
+    ),
+    "init": schema_object(
+        ["created", "suite", "files"],
+        {"created": {"type": "string"}, "suite": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}}},
+    ),
+    "validate": schema_object(
+        ["suite", "case_count", "valid"],
+        {"suite": {"type": "string"}, "case_count": {"type": "integer", "minimum": 0}, "valid": {"type": "boolean"}},
+    ),
+    "run": schema_object(
+        ["run_id", "run_dir", "run", "report_hash"],
+        {"run_id": {"type": "string"}, "run_dir": {"type": "string"}, "run": RUN_SUMMARY_SCHEMA, "report_hash": {"type": "string"}, "existing": {"type": "boolean"}},
+    ),
+    "status": schema_object(
+        ["run_id", "run_dir", "run", "cases", "recommended_action"],
+        {
+            "run_id": {"type": "string"},
+            "run_dir": {"type": "string"},
+            "run": RUN_SUMMARY_SCHEMA,
+            "cases": {"type": "array", "items": {"type": "object"}},
+            "recommended_action": schema_object(["command", "rationale", "alternatives"], {"command": {"type": "string"}, "rationale": {"type": "string"}, "alternatives": {"type": "array", "items": {"type": "string"}}}),
+        },
+    ),
+    "report": schema_object(
+        ["run", "failures", "cases", "run_id", "report_hash"],
+        {
+            "run": schema_object(["ok", "suite", "case_count", "status_counts"], {"ok": {"type": "boolean"}, "suite": {"type": "string"}, "case_count": {"type": "integer", "minimum": 0}, "status_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}}),
+            "failures": {"type": "array", "items": {"type": "object"}},
+            "cases": {"type": "array", "items": {"type": "object"}},
+            "run_id": {"type": "string"},
+            "report_hash": {"type": "string"},
+        },
+    ),
+}
+
+
 def schema_data(verb: str | None = None) -> dict[str, Any]:
     envelope_schema = {
         "type": "object",
@@ -224,7 +297,7 @@ def schema_data(verb: str | None = None) -> dict[str, Any]:
             "errors": {"type": "array"},
         },
     }
-    schemas = {name: {"type": "object", "additionalProperties": True} for name in capabilities_data()["verbs"]}
+    schemas = DATA_SCHEMAS
     if verb:
         if verb not in schemas:
             raise EvalctlError("E_CASE_INVALID", f"unknown schema verb '{verb}'", "try: evalctl capabilities --json", 1)
