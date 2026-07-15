@@ -424,6 +424,143 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertFalse(advisory["ok"])
             self.assertFalse(advisory["required"])
 
+    def test_command_scorer_artifact_replay_does_not_reexecute(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "scorer.py"
+            scorer_path.write_text(
+                "import json\n"
+                "print(json.dumps({'ok': True, 'score': 1.0, 'label': 'pass', 'findings': []}))\n"
+            )
+            suite = self.load_suite(cwd)
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True, "argv": [sys.executable, str(scorer_path)]}]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "cmd-pass", "--json"], cwd)
+            self.assertTrue(run["data"]["run"]["ok"])
+            original_hash = run["data"]["report_hash"]
+            case_dir = cwd / "evals" / "runs" / "cmd-pass" / "cases" / "cr-pass"
+            verdict = json.loads((case_dir / "scorers" / "judge.json").read_text())
+            self.assertEqual(verdict["id"], "judge")
+            manifest = json.loads((cwd / "evals" / "runs" / "cmd-pass" / "manifest.json").read_text())
+            self.assertEqual(manifest["cases"][0]["scores"][0]["id"], "judge")
+
+            copied = cwd / "copied-command-run"
+            shutil.copytree(cwd / "evals" / "runs" / "cmd-pass", copied)
+            scorer_path.unlink()
+            report = self.envelope(["report", "--run-dir", str(copied), "--format", "json"], cwd)
+            self.assertEqual(report["data"]["report_hash"], original_hash)
+            self.assertTrue(report["data"]["run"]["ok"])
+
+    def test_command_scorer_failure_projection_includes_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            pass_path = self.suite_path(cwd) / "pass_scorer.py"
+            fail_path = self.suite_path(cwd) / "fail_scorer.py"
+            pass_path.write_text("import json\nprint(json.dumps({'ok': True, 'score': 1, 'label': 'pass', 'findings': []}))\n")
+            fail_path.write_text("import json\nprint(json.dumps({'ok': False, 'score': 0, 'label': 'fail', 'findings': [{'why': 'nope'}]}))\n")
+            suite = self.load_suite(cwd)
+            suite["scorers"] = [
+                {"name": "command", "id": "judge-pass", "required": True, "argv": [sys.executable, str(pass_path)]},
+                {"name": "command", "id": "judge-fail", "required": True, "argv": [sys.executable, str(fail_path)]},
+            ]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "cmd-two", "--json"], cwd)
+            self.assertEqual(run["data"]["run"]["status_counts"], {"error": 0, "fail": 1, "pass": 0})
+            report = self.envelope(["report", "cmd-two", "--format", "json"], cwd)
+            score_ids = {score.get("id") for score in report["data"]["failures"][0]["scores"] if score["scorer"] == "command" and not score["ok"]}
+            self.assertEqual(score_ids, {"judge-fail"})
+
+    def test_command_scorer_verdict_normalization_and_status_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "verdict_scorer.py"
+            suite = self.load_suite(cwd)
+            variants = [
+                ("bad-score", "{'ok': True, 'score': '1', 'label': 'pass', 'findings': []}", True, "error"),
+                ("nan-score", '{"ok": true, "score": NaN, "label": "pass", "findings": []}', True, "error"),
+                ("missing-ok", "{'score': 1, 'label': 'pass', 'findings': []}", True, "error"),
+                ("extra-stdout", '{"ok": true, "score": 1, "label": "pass", "findings": []} trailing', True, "error"),
+                ("error-true", "{'ok': True, 'score': 1, 'label': 'pass', 'findings': [], 'error': True}", True, "error"),
+                ("required-fail", "{'ok': False, 'score': 0, 'label': 'fail', 'findings': []}", True, "fail"),
+                ("advisory-fail", "{'ok': False, 'score': 0, 'label': 'fail', 'findings': []}", False, "pass"),
+            ]
+            for name, payload, required, expected_status in variants:
+                if payload.startswith("{'"):
+                    scorer_path.write_text(f"import json\nprint(json.dumps({payload}))\n")
+                else:
+                    scorer_path.write_text(f"print({payload!r})\n")
+                suite["scorers"] = [{"name": "command", "id": "judge", "required": required, "argv": [sys.executable, str(scorer_path)]}]
+                self.write_suite(cwd, suite)
+                run = self.envelope(["run", "code-review", "--run-id", name, "--json"], cwd)
+                self.assertEqual(run["data"]["run"]["status_counts"][expected_status], 1, msg=name)
+                if expected_status == "error":
+                    self.assertIn("W_PARTIAL_RUN", {w["code"] for w in run["warnings"]}, msg=name)
+
+    def test_command_scorer_nonzero_and_fail_on_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "bad_scorer.py"
+            scorer_path.write_text("import sys\nprint('not json')\nsys.exit(2)\n")
+            suite = self.load_suite(cwd)
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True, "argv": [sys.executable, str(scorer_path)]}]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "cmd-nonzero", "--json"], cwd)
+            self.assertEqual(run["data"]["run"]["status_counts"], {"error": 1, "fail": 0, "pass": 0})
+            self.assertEqual(run["errors"], [])
+            self.assertIn("W_PARTIAL_RUN", {w["code"] for w in run["warnings"]})
+            failed = self.envelope(["run", "code-review", "--run-id", "cmd-nonzero-fail", "--fail-on-fail", "--json"], cwd, expect=6)
+            self.assertTrue(failed["ok"])
+            self.assertEqual(failed["errors"], [])
+
+    def test_command_scorer_timeout_kills_group_and_redacts_debug_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "timeout_scorer.py"
+            grandchild = (
+                "import pathlib, sys, time\n"
+                "time.sleep(3)\n"
+                "pathlib.Path(sys.argv[1]).write_text('alive')\n"
+            )
+            scorer_path.write_text(
+                "import os, pathlib, subprocess, sys, time\n"
+                "marker = pathlib.Path(os.environ['EVALCTL_WORKSPACE']) / 'command-scorer-grandchild'\n"
+                f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, str(marker)])\n"
+                "print('SECRET1234567890-out', flush=True)\n"
+                "print('SECRET1234567890-err', file=sys.stderr, flush=True)\n"
+                "time.sleep(10)\n"
+            )
+            suite = self.load_suite(cwd)
+            suite["runner"]["max_output_bytes"] = 20
+            suite["runner"]["redact_patterns"] = ["SECRET[0-9]+"]
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True, "argv": [sys.executable, str(scorer_path)], "timeout_seconds": 1}]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "cmd-timeout", "--json"], cwd)
+            self.assertEqual(run["data"]["run"]["status_counts"], {"error": 1, "fail": 0, "pass": 0})
+            self.assertIn("W_PARTIAL_RUN", {w["code"] for w in run["warnings"]})
+            case_dir = cwd / "evals" / "runs" / "cmd-timeout" / "cases" / "cr-pass"
+            stdout = (case_dir / "scorers" / "judge.stdout.txt").read_text()
+            stderr = (case_dir / "scorers" / "judge.stderr.txt").read_text()
+            self.assertNotIn("SECRET", stdout)
+            self.assertNotIn("SECRET", stderr)
+            self.assertLessEqual(len(stdout.encode()), 20)
+            self.assertLessEqual(len(stderr.encode()), 20)
+            time.sleep(3.5)
+            self.assertFalse((case_dir / "workspace" / "command-scorer-grandchild").exists())
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")

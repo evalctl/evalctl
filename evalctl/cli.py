@@ -4,6 +4,7 @@ import concurrent.futures
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,8 @@ from . import __version__
 
 CONTRACT_VERSION = 1
 TOOL = "evalctl"
+DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 EXIT_CODES = {
     0: {"meaning": "success", "retryable": None},
@@ -41,6 +44,7 @@ CODE_REGISTRY = {
     "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
+    "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
     "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run"], "retryable": True, "surface": "envelope"},
     "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init"], "retryable": False, "surface": "envelope"},
     "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run"], "surface": "envelope"},
@@ -570,6 +574,10 @@ def render_runner_arg(arg: str, env: dict[str, str]) -> str:
     return arg
 
 
+def is_safe_id(value: str) -> bool:
+    return bool(value) and value not in {".", ".."} and ".." not in value and bool(SAFE_ID_RE.fullmatch(value))
+
+
 def decode_subprocess_output(value: str | bytes | None) -> str:
     if value is None:
         return ""
@@ -578,12 +586,19 @@ def decode_subprocess_output(value: str | bytes | None) -> str:
     return value.decode("utf-8", "replace")
 
 
+def score_summary(score: dict[str, Any]) -> dict[str, Any]:
+    out = {"scorer": score["scorer"], "ok": score["ok"], "score": score["score"]}
+    if "id" in score:
+        out["id"] = score["id"]
+    return out
+
+
 def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "id": case["id"],
         "input_hash": sha256_text(stable_json(case)),
         "status": status,
-        "scores": [{"scorer": s["scorer"], "ok": s["ok"], "score": s["score"]} for s in scores],
+        "scores": [score_summary(s) for s in scores],
         "artifacts": {
             "input": f"cases/{case['id']}/input.json",
             "output": f"cases/{case['id']}/output.txt",
@@ -630,7 +645,7 @@ def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str
     write_json(case_dir / "workspace-after.json", after)
     write_json(case_dir / "workspace-diff.json", diff)
     (case_dir / "workspace.diff").write_text(render_text_diff(diff))
-    scores = score_case(case, "", runner_json, after, diff, suite.get("scorers", []))
+    scores = score_case(case, "", runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=False, suite=suite)
     score_doc = {"case_id": case["id"], "status": "error", "ok": False, "scores": scores}
     write_json(case_dir / "score.json", score_doc)
     return case_manifest_entry(case, "error", scores), warnings
@@ -737,7 +752,7 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
     write_json(case_dir / "workspace-diff.json", diff)
     (case_dir / "workspace.diff").write_text(render_text_diff(diff))
     status = "error" if timed_out or spawn_failed else "pass"
-    scores = score_case(case, output_text, runner_json, after, diff, suite.get("scorers", []))
+    scores = score_case(case, output_text, runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=True, suite=suite, eval_env=eval_env)
     if any(s.get("error") for s in scores):
         status = "error"
     elif status != "error" and not all(s["ok"] for s in scores if s.get("required", True)):
@@ -751,7 +766,9 @@ def render_text_diff(diff: dict[str, Any]) -> str:
     return "\n".join(f"{p['status']}\t{p['path']}" for p in diff["changed_paths"]) + ("\n" if diff["changed_paths"] else "")
 
 
-def score_case(case: dict[str, Any], output_text: str, runner_json: dict[str, Any], after: dict[str, Any], diff: dict[str, Any], scorers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def score_case(case: dict[str, Any], output_text: str, runner_json: dict[str, Any], after: dict[str, Any], diff: dict[str, Any],
+               scorers: list[dict[str, Any]], *, case_dir: Path | None = None, execute: bool = False,
+               suite: dict[str, Any] | None = None, eval_env: dict[str, str] | None = None) -> list[dict[str, Any]]:
     expect = case.get("expect", {})
     configured = scorers or [{"name": n, "required": True} for n in ("contains", "regex", "exact", "json-schema", "numeric-threshold", "file-exists", "exit-code", "workspace-diff")]
     out: list[dict[str, Any]] = []
@@ -759,19 +776,162 @@ def score_case(case: dict[str, Any], output_text: str, runner_json: dict[str, An
         name = scorer["name"]
         required = bool(scorer.get("required", True))
         try:
-            result = run_scorer(name, expect, output_text, runner_json, after, diff)
+            result = run_scorer(scorer, expect, output_text, runner_json, after, diff, required=required,
+                                case_dir=case_dir, execute=execute, suite=suite or {}, eval_env=eval_env or {})
             if result is None:
                 continue
             result["required"] = required
             out.append(result)
         except Exception as exc:
-            out.append({"scorer": name, "ok": False, "score": 0.0, "label": "error", "required": required, "findings": [{"why": str(exc)}], "error": True})
+            result = {"scorer": name, "ok": False, "score": 0.0, "label": "error", "required": required, "findings": [{"why": str(exc)}], "error": True}
+            if scorer.get("id"):
+                result["id"] = scorer["id"]
+            if name == "command":
+                result["error_code"] = "E_SCORER_CASE_FAILED"
+            out.append(result)
     return out
 
 
-def run_scorer(name: str, expect: dict[str, Any], output_text: str, runner_json: dict[str, Any], after: dict[str, Any], diff: dict[str, Any]) -> dict[str, Any] | None:
+def scorer_failure(scorer: dict[str, Any], required: bool, why: str) -> dict[str, Any]:
+    result = {
+        "scorer": scorer.get("name", "command"),
+        "ok": False,
+        "score": 0.0,
+        "label": "error",
+        "required": required,
+        "findings": [{"why": why}],
+        "error": True,
+        "error_code": "E_SCORER_CASE_FAILED",
+    }
+    if scorer.get("id"):
+        result["id"] = scorer["id"]
+    return result
+
+
+def normalize_command_verdict(raw: Any, scorer: dict[str, Any], required: bool) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return scorer_failure(scorer, required, "command scorer stdout must be one JSON object")
+    if not isinstance(raw.get("ok"), bool):
+        return scorer_failure(scorer, required, "command scorer verdict requires boolean ok")
+    score = raw.get("score")
+    if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(float(score)) or not 0.0 <= float(score) <= 1.0:
+        return scorer_failure(scorer, required, "command scorer verdict requires finite numeric score in 0.0..1.0")
+    label = raw.get("label")
+    if label is None or label == "":
+        label = "pass" if raw["ok"] else "fail"
+    if not isinstance(label, str):
+        return scorer_failure(scorer, required, "command scorer verdict label must be a string")
+    findings_raw = raw.get("findings")
+    if not isinstance(findings_raw, list):
+        return scorer_failure(scorer, required, "command scorer verdict requires findings list")
     findings: list[dict[str, Any]] = []
-    if name == "exact":
+    for item in findings_raw:
+        if isinstance(item, str):
+            findings.append({"why": item})
+        elif isinstance(item, dict):
+            findings.append(item)
+        else:
+            return scorer_failure(scorer, required, "command scorer findings must be objects or strings")
+    result = {
+        "scorer": "command",
+        "id": scorer["id"],
+        "ok": raw["ok"],
+        "score": float(score),
+        "label": label,
+        "required": required,
+        "findings": findings,
+    }
+    if bool(raw.get("error")):
+        result.update({"ok": False, "score": 0.0, "label": "error", "error": True, "error_code": "E_SCORER_CASE_FAILED"})
+    return result
+
+
+def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | None, execute: bool,
+                       suite: dict[str, Any], eval_env: dict[str, str]) -> dict[str, Any]:
+    scorer_id = str(scorer.get("id", ""))
+    if not is_safe_id(scorer_id):
+        return scorer_failure(scorer, required, "command scorer id must be path-safe")
+    if case_dir is None:
+        return scorer_failure(scorer, required, "command scorer requires case_dir")
+    scorers_dir = case_dir / "scorers"
+    verdict_path = scorers_dir / f"{scorer_id}.json"
+    if not execute:
+        verdict = read_json(verdict_path)
+        if not isinstance(verdict, dict):
+            return scorer_failure(scorer, required, "command scorer verdict artifact must be an object")
+        return verdict
+    scorers_dir.mkdir(parents=True, exist_ok=True)
+    timeout = int(scorer.get("timeout_seconds") or DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS)
+    runner = suite.get("runner", {})
+    max_bytes = int(scorer.get("max_output_bytes") or runner.get("max_output_bytes") or 5 * 1024 * 1024)
+    env = {k: os.environ[k] for k in runner.get("env_allowlist", []) if k in os.environ}
+    env.update(eval_env)
+    env_values = [os.environ.get(k, "") for k in runner.get("redact_env_values", [])]
+    patterns = runner.get("redact_patterns", [])
+    stdout = ""
+    stderr = ""
+    proc: subprocess.Popen[str] | None = None
+    try:
+        if scorer.get("shell", False):
+            command = scorer.get("command")
+            if not isinstance(command, str) or not command:
+                result = scorer_failure(scorer, required, "command scorer shell mode requires command")
+                write_json(verdict_path, result)
+                return result
+            cmd: str | list[str] = render_runner_arg(command, eval_env)
+            proc = subprocess.Popen(cmd, shell=True, cwd=case_dir / "workspace", env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        else:
+            argv_raw = scorer.get("argv")
+            if not isinstance(argv_raw, list) or not argv_raw:
+                result = scorer_failure(scorer, required, "command scorer requires argv when shell:false")
+                write_json(verdict_path, result)
+                return result
+            cmd = [render_runner_arg(str(a), eval_env) for a in argv_raw]
+            proc = subprocess.Popen(cmd, shell=False, cwd=case_dir / "workspace", env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        stdout, stderr = proc.communicate(timeout=timeout)
+        if proc.returncode != 0:
+            result = scorer_failure(scorer, required, f"command scorer exited {proc.returncode}")
+        else:
+            try:
+                raw = json.loads(stdout.strip())
+            except json.JSONDecodeError as exc:
+                result = scorer_failure(scorer, required, f"invalid command scorer JSON: {exc.msg}")
+            else:
+                result = normalize_command_verdict(raw, scorer, required)
+    except subprocess.TimeoutExpired as exc:
+        if proc is not None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            drained_stdout, drained_stderr = proc.communicate()
+            stdout = decode_subprocess_output(exc.stdout) + decode_subprocess_output(drained_stdout)
+            stderr = decode_subprocess_output(exc.stderr) + decode_subprocess_output(drained_stderr)
+        result = scorer_failure(scorer, required, f"command scorer timed out after {timeout}s")
+    except OSError as exc:
+        result = scorer_failure(scorer, required, f"command scorer spawn failed: {exc}")
+    stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
+    stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
+    stdout, _ = apply_redaction(stdout, patterns, env_values)
+    stderr, _ = apply_redaction(stderr, patterns, env_values)
+    stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
+    stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
+    (scorers_dir / f"{scorer_id}.stdout.txt").write_text(stdout)
+    (scorers_dir / f"{scorer_id}.stderr.txt").write_text(stderr)
+    write_json(verdict_path, result)
+    return result
+
+
+def run_scorer(scorer: dict[str, Any], expect: dict[str, Any], output_text: str, runner_json: dict[str, Any],
+               after: dict[str, Any], diff: dict[str, Any], *, required: bool, case_dir: Path | None,
+               execute: bool, suite: dict[str, Any], eval_env: dict[str, str]) -> dict[str, Any] | None:
+    name = scorer["name"]
+    findings: list[dict[str, Any]] = []
+    if name == "command":
+        return run_command_scorer(scorer, required, case_dir, execute, suite, eval_env)
+    elif name == "exact":
         if "exact" not in expect:
             return None
         ok = output_text == expect["exact"]
@@ -966,7 +1126,7 @@ def recompute_case_score(run_dir: Path, case_entry: dict[str, Any], suite: dict[
     before = read_json(case_dir / "workspace-before.json")
     after = read_json(case_dir / "workspace-after.json")
     diff = diff_manifests(before, after)
-    scores = score_case(case, output, runner_json, after, diff, suite.get("scorers", []))
+    scores = score_case(case, output, runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=False, suite=suite)
     status = "error" if runner_json.get("timed_out") or runner_json.get("spawn_failed") or any(s.get("error") for s in scores) else "pass"
     if status != "error" and not all(s["ok"] for s in scores if s.get("required", True)):
         status = "fail"
@@ -983,7 +1143,13 @@ def report_data(run_dir: Path) -> dict[str, Any]:
         cases.append({"id": score["case_id"], "status": score["status"], "ok": score["ok"], "aggregate_score": aggregate, "scores": score["scores"], "artifacts": entry["artifacts"]})
     failures = [c for c in cases if c["status"] != "pass"]
     failures.sort(key=lambda c: (0 if c["status"] == "error" else 1, c["aggregate_score"], c["id"]))
-    normalized = {"run": {"ok": not failures, "suite": manifest_doc["suite"]["name"], "case_count": len(cases), "status_counts": status_counts(cases)}, "failures": [{"id": f["id"], "status": f["status"], "scores": [{"scorer": s["scorer"], "ok": s["ok"], "label": s["label"], "findings": s["findings"]} for s in f["scores"]]} for f in failures], "cases": [{"id": c["id"], "status": c["status"], "ok": c["ok"]} for c in cases]}
+    def report_score(score: dict[str, Any]) -> dict[str, Any]:
+        out = {"scorer": score["scorer"], "ok": score["ok"], "label": score["label"], "findings": score["findings"]}
+        if "id" in score:
+            out["id"] = score["id"]
+        return out
+
+    normalized = {"run": {"ok": not failures, "suite": manifest_doc["suite"]["name"], "case_count": len(cases), "status_counts": status_counts(cases)}, "failures": [{"id": f["id"], "status": f["status"], "scores": [report_score(s) for s in f["scores"]]} for f in failures], "cases": [{"id": c["id"], "status": c["status"], "ok": c["ok"]} for c in cases]}
     return {**normalized, "run_id": manifest_doc["run_id"], "report_hash": sha256_text(stable_json(normalized))}
 
 
