@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -66,6 +67,12 @@ class EvalctlCliTests(unittest.TestCase):
         cases_path = self.suite_path(cwd) / "cases.jsonl"
         first = cases_path.read_text().splitlines()[0]
         cases_path.write_text(first + "\n")
+
+    def load_cases(self, cwd: Path) -> list[dict]:
+        return [json.loads(line) for line in (self.suite_path(cwd) / "cases.jsonl").read_text().splitlines() if line.strip()]
+
+    def write_cases(self, cwd: Path, cases: list[dict]) -> None:
+        (self.suite_path(cwd) / "cases.jsonl").write_text("\n".join(json.dumps(c, sort_keys=True, separators=(",", ":")) for c in cases) + "\n")
 
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -138,6 +145,10 @@ class EvalctlCliTests(unittest.TestCase):
             conflict = self.run_cli(["init", "--json"], cwd, expect=5)
             conflict_payload = json.loads(conflict.stdout)
             self.assertEqual(conflict_payload["errors"][0]["code"], "E_RUN_CONFLICT")
+
+            bad_jobs = self.run_cli(["run", "code-review", "--jobs", "0", "--json"], cwd, expect=1)
+            bad_jobs_payload = json.loads(bad_jobs.stdout)
+            self.assertEqual(bad_jobs_payload["errors"][0]["code"], "E_CASE_INVALID")
 
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -242,6 +253,53 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(runner_json["error_code"], "E_RUNNER_FAILED")
             score_json = json.loads((case_dir / "score.json").read_text())
             self.assertEqual(score_json["status"], "error")
+
+    def test_jobs_parallelize_and_preserve_normalized_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            suite = self.load_suite(cwd)
+            runner = (
+                "import os, pathlib, time\n"
+                "time.sleep(2)\n"
+                "pathlib.Path(os.environ['EVALCTL_OUTPUT_FILE']).write_text('ok\\n')\n"
+            )
+            suite["runner"]["argv"] = [sys.executable, "-c", runner]
+            suite["scorers"] = [{"name": "exit-code", "required": True}]
+            self.write_suite(cwd, suite)
+
+            start = time.monotonic()
+            serial = self.envelope(["run", "code-review", "--run-id", "jobs1", "--jobs", "1", "--json"], cwd)
+            serial_duration = time.monotonic() - start
+            start = time.monotonic()
+            parallel = self.envelope(["run", "code-review", "--run-id", "jobs2", "--jobs", "2", "--json"], cwd)
+            parallel_duration = time.monotonic() - start
+
+            self.assertGreater(serial_duration, 3.5)
+            self.assertLess(parallel_duration, 3.5)
+            self.assertEqual(serial["data"]["report_hash"], parallel["data"]["report_hash"])
+
+            manifest1 = json.loads((cwd / "evals" / "runs" / "jobs1" / "manifest.json").read_text())
+            manifest2 = json.loads((cwd / "evals" / "runs" / "jobs2" / "manifest.json").read_text())
+            self.assertEqual(manifest1["execution"]["jobs"], 1)
+            self.assertEqual(manifest2["execution"]["jobs"], 2)
+            projection1 = [(c["id"], c["status"], c["scores"], c["artifacts"]) for c in manifest1["cases"]]
+            projection2 = [(c["id"], c["status"], c["scores"], c["artifacts"]) for c in manifest2["cases"]]
+            self.assertEqual(projection1, projection2)
+
+    def test_unreplayable_future_failure_does_not_wedge_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            cases = self.load_cases(cwd)
+            cases[0]["workspace"] = "suite.json"
+            self.write_cases(cwd, [cases[0]])
+
+            failed = self.run_cli(["run", "code-review", "--run-id", "badworkspace", "--json"], cwd, expect=3)
+            payload = json.loads(failed.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["errors"][0]["code"], "E_SCORER_FAILED")
+            self.assertFalse((cwd / "evals" / "runs" / "badworkspace").exists())
 
 
 if __name__ == "__main__":

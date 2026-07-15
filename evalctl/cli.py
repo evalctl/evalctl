@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import fnmatch
 import hashlib
 import json
@@ -472,10 +473,81 @@ def write_json(path: Path, data: Any) -> None:
     _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def parse_jobs(argv: list[str]) -> int:
+    raw = value_after(argv, "--jobs")
+    if raw is None:
+        return min(os.cpu_count() or 1, 4)
+    try:
+        jobs = int(raw)
+    except ValueError:
+        raise EvalctlError("E_CASE_INVALID", f"--jobs must be a positive integer (got {raw})", "try: evalctl run code-review --jobs 4 --json", 1)
+    if jobs < 1:
+        raise EvalctlError("E_CASE_INVALID", f"--jobs must be at least 1 (got {jobs})", "try: evalctl run code-review --jobs 1 --json", 1)
+    return jobs
+
+
 def render_runner_arg(arg: str, env: dict[str, str]) -> str:
     for key, value in env.items():
         arg = arg.replace(f"${key}", value)
     return arg
+
+
+def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "id": case["id"],
+        "input_hash": sha256_text(stable_json(case)),
+        "status": status,
+        "scores": [{"scorer": s["scorer"], "ok": s["ok"], "score": s["score"]} for s in scores],
+        "artifacts": {
+            "input": f"cases/{case['id']}/input.json",
+            "output": f"cases/{case['id']}/output.txt",
+            "runner": f"cases/{case['id']}/runner.json",
+            "workspace_before": f"cases/{case['id']}/workspace-before.json",
+            "workspace_after": f"cases/{case['id']}/workspace-after.json",
+            "diff_manifest": f"cases/{case['id']}/workspace-diff.json",
+            "diff": f"cases/{case['id']}/workspace.diff",
+            "score": f"cases/{case['id']}/score.json",
+        },
+    }
+
+
+def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, exc: BaseException) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    case_dir = run_dir / "cases" / case["id"]
+    case_dir.mkdir(parents=True, exist_ok=True)
+    workspace = case_dir / "workspace"
+    if not workspace.exists():
+        shutil.copytree(suite_dir / case["workspace"], workspace)
+    input_json = case_dir / "input.json"
+    task_txt = case_dir / "task.txt"
+    output_file = case_dir / "output.txt"
+    write_json(input_json, case)
+    task_txt.write_text(case["task"])
+    if case.get("diff"):
+        diff_src = suite_dir / case["diff"]
+        diff_file = case_dir / "input.diff"
+        if not diff_file.exists():
+            shutil.copyfile(diff_src, diff_file)
+    before, mw = manifest(workspace)
+    warnings.extend(mw)
+    after, mw = manifest(workspace)
+    warnings.extend(mw)
+    diff = diff_manifests(before, after)
+    output_file.write_text("")
+    (case_dir / "runner.stdout.txt").write_text("")
+    (case_dir / "runner.stderr.txt").write_text(str(exc))
+    runner_json = {"exit_code": None, "signal": None, "timed_out": False, "spawn_failed": True, "error_code": "E_RUNNER_FAILED", "duration_ms": 0,
+                   "stdout_truncated": False, "stderr_truncated": False, "output_truncated": False,
+                   "stdout_redacted": False, "stderr_redacted": False, "output_redacted": False}
+    write_json(case_dir / "runner.json", runner_json)
+    write_json(case_dir / "workspace-before.json", before)
+    write_json(case_dir / "workspace-after.json", after)
+    write_json(case_dir / "workspace-diff.json", diff)
+    (case_dir / "workspace.diff").write_text(render_text_diff(diff))
+    scores = score_case(case, "", runner_json, after, diff, suite.get("scorers", []))
+    score_doc = {"case_id": case["id"], "status": "error", "ok": False, "scores": scores}
+    write_json(case_dir / "score.json", score_doc)
+    return case_manifest_entry(case, "error", scores), warnings
 
 
 def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, timeout_override: int | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -574,22 +646,7 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
         status = "fail"
     score_doc = {"case_id": case["id"], "status": status, "ok": status == "pass", "scores": scores}
     write_json(case_dir / "score.json", score_doc)
-    return {
-        "id": case["id"],
-        "input_hash": sha256_text(stable_json(case)),
-        "status": status,
-        "scores": [{"scorer": s["scorer"], "ok": s["ok"], "score": s["score"]} for s in scores],
-        "artifacts": {
-            "input": f"cases/{case['id']}/input.json",
-            "output": f"cases/{case['id']}/output.txt",
-            "runner": f"cases/{case['id']}/runner.json",
-            "workspace_before": f"cases/{case['id']}/workspace-before.json",
-            "workspace_after": f"cases/{case['id']}/workspace-after.json",
-            "diff_manifest": f"cases/{case['id']}/workspace-diff.json",
-            "diff": f"cases/{case['id']}/workspace.diff",
-            "score": f"cases/{case['id']}/score.json",
-        },
-    }, warnings
+    return case_manifest_entry(case, status, scores), warnings
 
 
 def render_text_diff(diff: dict[str, Any]) -> str:
@@ -702,6 +759,7 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     validate_suite(suite_dir)
     suite = read_json(suite_dir / "suite.json")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+    jobs = parse_jobs(argv)
     all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
     if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
         print(all_warnings[0]["message"], file=sys.stderr)
@@ -716,9 +774,25 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
     timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
+    case_results: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    sorted_cases = sorted(cases, key=lambda c: c["id"])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
+        future_to_case = {executor.submit(run_case, suite_dir, suite, case, run_dir, timeout_override): case for case in sorted_cases}
+        for future in concurrent.futures.as_completed(future_to_case):
+            case = future_to_case[future]
+            try:
+                entry, warnings = future.result()
+            except Exception as exc:
+                try:
+                    entry, warnings = synthesize_case_error(suite_dir, suite, case, run_dir, exc)
+                except Exception as synth_exc:
+                    if not (run_dir / "manifest.json").exists():
+                        shutil.rmtree(run_dir, ignore_errors=True)
+                    raise EvalctlError("E_SCORER_FAILED", f"case {case['id']} failed before replayable artifacts could be written: {synth_exc}", "retry evalctl run with a fresh --run-id", 3)
+            case_results[case["id"]] = (entry, warnings)
     case_entries = []
-    for case in sorted(cases, key=lambda c: c["id"]):
-        entry, warnings = run_case(suite_dir, suite, case, run_dir, timeout_override)
+    for case in sorted_cases:
+        entry, warnings = case_results[case["id"]]
         all_warnings.extend(warnings)
         case_entries.append(entry)
     if any(c["status"] == "error" for c in case_entries):
@@ -729,7 +803,7 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
         "run_id": run_id,
         "suite": {"name": suite.get("name", suite_dir.name), "hash": sha256_text(stable_json(suite)), "case_count": len(cases)},
         "created_ts": now_iso(),
-        "execution": {"mode": "synchronous", "jobs": int(value_after(argv, "--jobs", "1") or "1"), "timeout_seconds": timeout_override or suite["runner"].get("timeout_seconds", 300)},
+        "execution": {"mode": "synchronous", "jobs": jobs, "timeout_seconds": timeout_override or suite["runner"].get("timeout_seconds", 300)},
         "replayed_from": None,
         "cases": case_entries,
     }
