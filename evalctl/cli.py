@@ -634,16 +634,22 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
     stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
     stdout, red_stdout = apply_redaction(stdout, patterns, env_values)
     stderr, red_stderr = apply_redaction(stderr, patterns, env_values)
-    output_text = output_file.read_text(errors="replace") if output_file.exists() else stdout
+    output_truncated = False
+    if output_file.exists():
+        output_bytes = output_file.read_bytes()
+        output_truncated = len(output_bytes) > max_bytes
+        output_text = output_bytes[:max_bytes].decode("utf-8", "replace")
+    else:
+        output_text = stdout
     output_text, red_output = apply_redaction(output_text, patterns, env_values)
     output_file.write_text(output_text)
     (case_dir / "runner.stdout.txt").write_text(stdout)
     (case_dir / "runner.stderr.txt").write_text(stderr)
     error_code = "E_RUNNER_TIMEOUT" if timed_out else "E_RUNNER_FAILED" if spawn_failed else None
     runner_json = {"exit_code": exit_code, "signal": signal_value, "timed_out": timed_out, "spawn_failed": spawn_failed, "error_code": error_code, "duration_ms": duration_ms,
-                   "stdout_truncated": trunc_stdout, "stderr_truncated": trunc_stderr, "output_truncated": False,
+                   "stdout_truncated": trunc_stdout, "stderr_truncated": trunc_stderr, "output_truncated": output_truncated,
                    "stdout_redacted": red_stdout, "stderr_redacted": red_stderr, "output_redacted": red_output}
-    if trunc_stdout or trunc_stderr:
+    if trunc_stdout or trunc_stderr or output_truncated:
         warnings.append({"code": "W_OUTPUT_TRUNCATED", "message": "runner output exceeded max_output_bytes"})
     write_json(case_dir / "runner.json", runner_json)
     after, mw = manifest(workspace)

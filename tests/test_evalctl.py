@@ -334,6 +334,36 @@ class EvalctlCliTests(unittest.TestCase):
             score_json = json.loads((case_dir / "score.json").read_text())
             self.assertEqual(score_json["status"], "error")
 
+    def test_output_file_truncation_caps_persisted_scored_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            cases = self.load_cases(cwd)
+            cases[0]["expect"] = {"exact": "a" * 10}
+            self.write_cases(cwd, cases)
+            suite = self.load_suite(cwd)
+            runner = (
+                "import os, pathlib\n"
+                "pathlib.Path(os.environ['EVALCTL_OUTPUT_FILE']).write_text('a' * 20)\n"
+            )
+            suite["runner"]["argv"] = [sys.executable, "-c", runner]
+            suite["runner"]["max_output_bytes"] = 10
+            suite["scorers"] = [{"name": "exact", "required": True}]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "trunc-output", "--json"], cwd)
+            self.assertTrue(run["data"]["run"]["ok"])
+            self.assertIn("W_OUTPUT_TRUNCATED", {w["code"] for w in run["warnings"]})
+            case_dir = cwd / "evals" / "runs" / "trunc-output" / "cases" / "cr-pass"
+            runner_json = json.loads((case_dir / "runner.json").read_text())
+            self.assertTrue(runner_json["output_truncated"])
+            self.assertEqual((case_dir / "output.txt").read_bytes(), b"a" * 10)
+
+            report = self.envelope(["report", "trunc-output", "--format", "json"], cwd)
+            self.assertEqual(report["data"]["report_hash"], run["data"]["report_hash"])
+            self.assertTrue(report["data"]["run"]["ok"])
+
     def test_jobs_parallelize_and_preserve_normalized_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
