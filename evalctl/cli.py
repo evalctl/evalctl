@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -580,6 +581,11 @@ def is_safe_id(value: str) -> bool:
     return bool(value) and value not in {".", ".."} and ".." not in value and bool(SAFE_ID_RE.fullmatch(value))
 
 
+def validate_suite_name(name: str) -> None:
+    if not is_safe_id(name) or "/" in name or "\\" in name:
+        raise EvalctlError("E_CASE_INVALID", f"invalid suite name: {name}", "use a simple name with letters, numbers, dot, underscore, or dash", 1)
+
+
 def decode_subprocess_output(value: str | bytes | None) -> str:
     if value is None:
         return ""
@@ -1011,6 +1017,71 @@ def command_validate(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=json_mode, human=f"{data['suite']}: {data['case_count']} cases valid", started=started)
 
 
+def runner_from_authoring_flags(argv: list[str], *, prefix: str = "--runner") -> dict[str, Any]:
+    argv_value = value_after(argv, f"{prefix}-argv")
+    command_value = value_after(argv, f"{prefix}-command")
+    shell = has_flag(argv, "--shell")
+    if bool(argv_value) == bool(command_value):
+        raise EvalctlError("E_CASE_INVALID", f"{prefix}-argv and {prefix}-command are mutually exclusive", f"try: {TOOL} suite add demo {prefix}-argv \"python3 $EVALCTL_WORKSPACE/r.py\"", 1)
+    if argv_value and shell:
+        raise EvalctlError("E_CASE_INVALID", "--shell requires --runner-command, not --runner-argv", "drop --shell or use --runner-command", 1)
+    if command_value and not shell:
+        raise EvalctlError("E_CASE_INVALID", "--runner-command requires --shell", "use --runner-argv for shell:false runners", 1)
+    runner = {
+        "argv": shlex.split(argv_value) if argv_value else None,
+        "shell": shell,
+        "command": command_value if command_value else None,
+        "cwd": None,
+        "timeout_seconds": 30,
+        "max_output_bytes": 1048576,
+        "env_allowlist": ["PATH", "HOME"],
+        "redact_env_values": [],
+        "redact_patterns": [],
+    }
+    if argv_value and not runner["argv"]:
+        raise EvalctlError("E_CASE_INVALID", "--runner-argv must not be empty", "provide at least one argv token", 1)
+    return runner
+
+
+def suite_add_data(name: str, runner: dict[str, Any], *, _validator: Any = validate_suite) -> dict[str, Any]:
+    validate_suite_name(name)
+    root = Path("evals") / "suites"
+    dest = root / name
+    suite_json = {
+        "name": name,
+        "cases": "cases.jsonl",
+        "acknowledged_unsandboxed_runner": True,
+        "runner": runner,
+        "scorers": [],
+    }
+    suite_text = json.dumps(suite_json, indent=2, sort_keys=True) + "\n"
+    if dest.exists():
+        existing_suite = dest / "suite.json"
+        if existing_suite.exists() and existing_suite.read_text() == suite_text:
+            return {"suite": name, "suite_dir": str(dest), "created": False, "files": [str(dest / "suite.json"), str(dest / "cases.jsonl")]}
+        raise EvalctlError("E_RUN_CONFLICT", f"suite already exists with different content: {name}", "choose a new suite name or edit the existing suite explicitly", 5)
+    root.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(tempfile.mkdtemp(prefix=f".{name}.", dir=root))
+    try:
+        (tmp_path / "fixtures").mkdir()
+        (tmp_path / "suite.json").write_text(suite_text)
+        (tmp_path / "cases.jsonl").write_text("")
+        _validator(tmp_path)
+        os.replace(tmp_path, dest)
+    except Exception:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+        raise
+    return {"suite": name, "suite_dir": str(dest), "created": True, "files": [str(dest / "suite.json"), str(dest / "cases.jsonl"), str(dest / "fixtures")]}
+
+
+def command_suite_add(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, {"--runner-argv", "--runner-command"}, {"--json", "--no-color", "--shell"})
+    if len(args) != 3 or args[1] != "add":
+        raise EvalctlError("E_CASE_INVALID", "suite command requires: suite add <name>", "try: evalctl suite add demo --runner-argv \"python3 $EVALCTL_WORKSPACE/r.py\" --json", 1)
+    data = suite_add_data(args[2], runner_from_authoring_flags(argv))
+    return print_envelope(data, json_mode=json_mode, human=f"{'Created' if data['created'] else 'Exists'} suite {data['suite']}", started=started)
+
+
 def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
                   jobs: int, timeout_override: int | None, replayed_from: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
@@ -1294,6 +1365,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_init(argv, json_mode, started)
         if cmd == "validate":
             return command_validate(argv, json_mode, started)
+        if cmd == "suite" and len(argv) > 1 and argv[1] == "add":
+            return command_suite_add(argv, json_mode, started)
         if cmd == "run":
             return command_run(argv, json_mode, started)
         if cmd == "replay":

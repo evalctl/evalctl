@@ -297,6 +297,52 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("W_REPLAY_CASE_ABSENT", codes)
             self.assertIn("W_NOTHING_TO_REPLAY", codes)
 
+    def test_suite_add_creates_valid_empty_suite_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            created = self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            self.assertTrue(created["data"]["created"])
+            suite_dir = cwd / "evals" / "suites" / "demo"
+            self.assertTrue((suite_dir / "suite.json").exists())
+            self.assertTrue((suite_dir / "cases.jsonl").exists())
+            self.assertTrue((suite_dir / "fixtures").is_dir())
+            valid = self.envelope(["validate", "demo", "--json"], cwd)
+            self.assertEqual(valid["data"], {"suite": "demo", "case_count": 0, "valid": True})
+
+            existing = self.envelope(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            self.assertFalse(existing["data"]["created"])
+            conflict = self.run_cli(["suite", "add", "demo", "--runner-argv", "python3 $EVALCTL_WORKSPACE/other.py", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+
+    def test_suite_add_rejects_unsafe_names_and_bad_runner_grammar(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bad_slash = self.run_cli(["suite", "add", "bad/name", "--runner-argv", "python3 x.py", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_slash.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            bad_dotdot = self.run_cli(["suite", "add", "..", "--runner-argv", "python3 x.py", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_dotdot.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            no_shell = self.run_cli(["suite", "add", "demo", "--runner-command", "python3 x.py", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(no_shell.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            both_forms = self.run_cli(["suite", "add", "demo", "--runner-argv", "python3 x.py", "--runner-command", "python3 x.py", "--shell", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(both_forms.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+
+    def test_suite_add_temp_dir_is_removed_on_validation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            old_cwd = Path.cwd()
+            os.chdir(cwd)
+            try:
+                def fail_validator(path: Path) -> dict:
+                    raise RuntimeError("simulated validation failure")
+
+                with self.assertRaises(RuntimeError):
+                    cli.suite_add_data("demo", cli.runner_from_authoring_flags(["suite", "add", "demo", "--runner-argv", "python3 x.py"]), _validator=fail_validator)
+                suites_root = cwd / "evals" / "suites"
+                self.assertFalse((suites_root / "demo").exists())
+                self.assertEqual([p.name for p in suites_root.iterdir()], [])
+            finally:
+                os.chdir(old_cwd)
+
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "manifest.json"
