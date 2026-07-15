@@ -230,6 +230,44 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(failed["ok"])
             self.assertEqual(failed["errors"], [])
 
+    def test_runner_timeout_kills_process_group_grandchild(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            suite = self.load_suite(cwd)
+            grandchild = (
+                "import pathlib, sys, time\n"
+                "time.sleep(3)\n"
+                "pathlib.Path(sys.argv[1]).write_text('alive')\n"
+            )
+            child = (
+                "import subprocess, sys, time\n"
+                f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, sys.argv[1]])\n"
+                "time.sleep(10)\n"
+            )
+            runner = (
+                "import os, subprocess, sys, time\n"
+                "marker = os.path.join(os.environ['EVALCTL_WORKSPACE'], 'grandchild-survived')\n"
+                f"subprocess.Popen([sys.executable, '-c', {child!r}, marker])\n"
+                "time.sleep(10)\n"
+            )
+            suite["runner"]["argv"] = [sys.executable, "-c", runner]
+            suite["runner"]["timeout_seconds"] = 1
+            suite["scorers"] = [{"name": "exit-code", "required": True}]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "pg-timeout", "--json"], cwd)
+            self.assertTrue(run["ok"])
+            self.assertEqual(run["errors"], [])
+            self.assertIn("W_PARTIAL_RUN", {w["code"] for w in run["warnings"]})
+            case_dir = cwd / "evals" / "runs" / "pg-timeout" / "cases" / "cr-pass"
+            runner_json = json.loads((case_dir / "runner.json").read_text())
+            self.assertTrue(runner_json["timed_out"])
+            self.assertEqual(runner_json["error_code"], "E_RUNNER_TIMEOUT")
+            time.sleep(3.5)
+            self.assertFalse((case_dir / "workspace" / "grandchild-survived").exists())
+
     def test_runner_spawn_failure_is_reportable_case_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)

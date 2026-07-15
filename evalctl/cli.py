@@ -492,6 +492,14 @@ def render_runner_arg(arg: str, env: dict[str, str]) -> str:
     return arg
 
 
+def decode_subprocess_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return value.decode("utf-8", "replace")
+
+
 def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "id": case["id"],
@@ -591,24 +599,30 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
     stdout = ""
     stderr = ""
     try:
+        stdin = subprocess.PIPE if runner.get("stdin") == "task" else None
+        input_text = case["task"] if runner.get("stdin") == "task" else None
         if runner.get("shell", False):
             cmd: str | list[str] = render_runner_arg(runner["command"], eval_env)
-            proc = subprocess.run(cmd, shell=True, cwd=cwd, env=env, text=True, input=case["task"] if runner.get("stdin") == "task" else None,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, start_new_session=True)
+            proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, text=True, stdin=stdin,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         else:
             argv = [render_runner_arg(str(a), eval_env) for a in runner["argv"]]
-            proc = subprocess.run(argv, shell=False, cwd=cwd, env=env, text=True, input=case["task"] if runner.get("stdin") == "task" else None,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, start_new_session=True)
+            proc = subprocess.Popen(argv, shell=False, cwd=cwd, env=env, text=True, stdin=stdin,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
         exit_code = proc.returncode
         if proc.returncode < 0:
             signal_value = -proc.returncode
-        stdout = proc.stdout
-        stderr = proc.stderr
     except subprocess.TimeoutExpired as exc:
         timed_out = True
         exit_code = None
-        stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
-        stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace")
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        drained_stdout, drained_stderr = proc.communicate()
+        stdout = decode_subprocess_output(exc.stdout) + decode_subprocess_output(drained_stdout)
+        stderr = decode_subprocess_output(exc.stderr) + decode_subprocess_output(drained_stderr)
     except OSError as exc:
         spawn_failed = True
         exit_code = None
