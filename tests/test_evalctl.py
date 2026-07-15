@@ -74,6 +74,14 @@ class EvalctlCliTests(unittest.TestCase):
     def write_cases(self, cwd: Path, cases: list[dict]) -> None:
         (self.suite_path(cwd) / "cases.jsonl").write_text("\n".join(json.dumps(c, sort_keys=True, separators=(",", ":")) for c in cases) + "\n")
 
+    def fix_cr_fail_runner(self, cwd: Path) -> None:
+        (self.suite_path(cwd) / "fixtures" / "cr-fail" / "runner.py").write_text(
+            "from pathlib import Path\n"
+            "import os\n"
+            "Path(os.environ['EVALCTL_OUTPUT_FILE']).write_text('bounds check fixed\\n')\n"
+            "Path('review.md').write_text('bounds check fixed\\n')\n"
+        )
+
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
@@ -207,6 +215,87 @@ class EvalctlCliTests(unittest.TestCase):
             busy = self.run_cli(["run", "code-review", "--run-id", "busy", "--json"], cwd, expect=4)
             busy_payload = json.loads(busy.stdout)
             self.assertEqual(busy_payload["errors"][0]["code"], "E_RUN_BUSY")
+
+    def test_replay_failed_reruns_recomputed_failed_subset_after_fix(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            source = self.envelope(["run", "code-review", "--run-id", "source", "--json"], cwd)
+            self.assertEqual(source["data"]["run"]["status_counts"], {"error": 0, "fail": 1, "pass": 1})
+            source_run = cwd / "evals" / "runs" / "source"
+            for score_file in source_run.glob("cases/*/score.json"):
+                score_file.write_text("not json\n")
+            report = self.envelope(["report", "source", "--format", "json"], cwd)
+            self.assertEqual([f["id"] for f in report["data"]["failures"]], ["cr-fail"])
+
+            self.fix_cr_fail_runner(cwd)
+            replay = self.envelope(["replay", "--failed", "source", "--run-id", "source-replay", "--json"], cwd)
+            self.assertEqual(replay["data"]["replayed_from"], "source")
+            self.assertEqual(replay["data"]["cases_replayed"], 1)
+            self.assertEqual(replay["data"]["run"]["status_counts"], {"error": 0, "fail": 0, "pass": 1})
+            manifest = json.loads((cwd / "evals" / "runs" / "source-replay" / "manifest.json").read_text())
+            self.assertEqual(manifest["replayed_from"], "source")
+            self.assertEqual(manifest["suite"]["case_count"], 1)
+            self.assertEqual([c["id"] for c in manifest["cases"]], ["cr-fail"])
+
+            green = self.envelope(["replay", "--failed", "source-replay", "--json"], cwd)
+            self.assertEqual(green["data"], {"replayed_from": "source-replay", "cases_replayed": 0})
+            self.assertIn("W_NOTHING_TO_REPLAY", {w["code"] for w in green["warnings"]})
+
+    def test_replay_source_parser_and_overwrite_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            self.envelope(["run", "code-review", "--run-id", "green", "--json"], cwd)
+
+            first = self.envelope(["replay", "green", "--failed", "--json"], cwd)
+            second = self.envelope(["replay", "--failed", "green", "--json"], cwd)
+            self.assertEqual(first["data"], {"replayed_from": "green", "cases_replayed": 0})
+            self.assertEqual(second["data"], {"replayed_from": "green", "cases_replayed": 0})
+            by_dir = self.envelope(["replay", "--failed", "--run-dir", str(cwd / "evals" / "runs" / "green"), "--run-id", "new-dest", "--json"], cwd)
+            self.assertEqual(by_dir["data"]["cases_replayed"], 0)
+
+            missing_failed = self.run_cli(["replay", "green", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(missing_failed.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            both_source_forms = self.run_cli(["replay", "--failed", "green", "--run-dir", str(cwd / "evals" / "runs" / "green"), "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(both_source_forms.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+
+            self.envelope(["init", "--force", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "source", "--json"], cwd)
+            self.fix_cr_fail_runner(cwd)
+            self.envelope(["replay", "--failed", "source", "--run-id", "dest", "--json"], cwd)
+            conflict = self.run_cli(["replay", "--failed", "source", "--run-id", "dest", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+            forced = self.envelope(["replay", "--failed", "source", "--run-id", "dest", "--force", "--json"], cwd)
+            self.assertEqual(forced["data"]["run_id"], "dest")
+
+            source_manifest = (cwd / "evals" / "runs" / "source" / "manifest.json").read_text()
+            same = self.run_cli(["replay", "--failed", "source", "--run-id", "source", "--force", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(same.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+            self.assertEqual((cwd / "evals" / "runs" / "source" / "manifest.json").read_text(), source_manifest)
+
+    def test_replay_suite_override_and_absent_case_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            suite_dir = self.suite_path(cwd)
+            suite = self.load_suite(cwd)
+            suite["name"] = "logical-name"
+            self.write_suite(cwd, suite)
+            self.envelope(["run", str(suite_dir), "--run-id", "path-source", "--json"], cwd)
+            self.fix_cr_fail_runner(cwd)
+            replay = self.envelope(["replay", "--failed", "path-source", "--suite", str(suite_dir), "--run-id", "path-replay", "--json"], cwd)
+            self.assertEqual(replay["data"]["run"]["status_counts"], {"error": 0, "fail": 0, "pass": 1})
+
+            self.envelope(["init", "--force", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "absent-source", "--json"], cwd)
+            cases = self.load_cases(cwd)
+            self.write_cases(cwd, [case for case in cases if case["id"] != "cr-fail"])
+            absent = self.envelope(["replay", "--failed", "absent-source", "--run-id", "absent-replay", "--json"], cwd)
+            codes = {w["code"] for w in absent["warnings"]}
+            self.assertIn("W_REPLAY_CASE_ABSENT", codes)
+            self.assertIn("W_NOTHING_TO_REPLAY", codes)
 
     def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:

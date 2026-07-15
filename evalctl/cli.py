@@ -46,8 +46,10 @@ CODE_REGISTRY = {
     "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
     "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
     "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run"], "retryable": True, "surface": "envelope"},
-    "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init"], "retryable": False, "surface": "envelope"},
-    "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run"], "surface": "envelope"},
+    "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init", "replay"], "retryable": False, "surface": "envelope"},
+    "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run", "replay"], "surface": "envelope"},
+    "W_REPLAY_CASE_ABSENT": {"class": "warning", "where": ["replay"], "surface": "envelope"},
+    "W_NOTHING_TO_REPLAY": {"class": "warning", "where": ["replay"], "surface": "envelope"},
     "W_TEXT_DIFF_APPROXIMATED": {"class": "warning", "where": ["run"], "surface": "envelope"},
     "W_OUTPUT_TRUNCATED": {"class": "warning", "where": ["run"], "surface": "envelope"},
     "W_PATH_UNREADABLE": {"class": "warning", "where": ["run"], "surface": "envelope"},
@@ -1009,36 +1011,11 @@ def command_validate(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=json_mode, human=f"{data['suite']}: {data['case_count']} cases valid", started=started)
 
 
-def command_run(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id"}, {"--json", "--no-color", "--fail-on-fail"})
-    if len(args) < 2:
-        raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
-    suite_dir = resolve_suite(args[1])
-    validate_suite(suite_dir)
-    suite = read_json(suite_dir / "suite.json")
-    cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
-    jobs = parse_jobs(argv)
-    all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
-    if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
-        print(all_warnings[0]["message"], file=sys.stderr)
-    run_id = value_after(argv, "--run-id") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ-") + suite.get("name", suite_dir.name)
-    run_dir = Path("evals") / "runs" / run_id
-    if run_dir.exists():
-        manifest_path = run_dir / "manifest.json"
-        if manifest_path.exists():
-            manifest_doc = read_json(manifest_path)
-            if run_identity(suite, suite_dir, cases) != manifest_identity(manifest_doc):
-                existing_count = manifest_doc["suite"]["case_count"]
-                existing_suite = manifest_doc["suite"]["name"]
-                raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed for suite `{existing_suite}`/{existing_count} cases; refusing to reuse for a different suite/case set", "use a fresh --run-id", 5)
-            data = report_data(run_dir)
-            run_summary = {"ok": data["run"]["ok"], "case_count": data["run"]["case_count"], "status_counts": data["run"]["status_counts"]}
-            existing = {"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": run_summary, "report_hash": data["report_hash"]}
-            return print_envelope(existing, json_mode=json_mode, warnings=all_warnings, started=started)
-        raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
+def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
+                  jobs: int, timeout_override: int | None, replayed_from: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
-    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
+    all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
     case_results: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     sorted_cases = sorted(cases, key=lambda c: c["id"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
@@ -1069,15 +1046,122 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
         "suite": {"name": suite.get("name", suite_dir.name), "hash": sha256_text(stable_json(suite)), "case_count": len(cases)},
         "created_ts": now_iso(),
         "execution": {"mode": "synchronous", "jobs": jobs, "timeout_seconds": timeout_override or suite["runner"].get("timeout_seconds", 300)},
-        "replayed_from": None,
+        "replayed_from": replayed_from,
         "cases": case_entries,
     }
     write_json(run_dir / "manifest.json", manifest_doc)
     report = report_data(run_dir)
     (run_dir / "report.md").write_text(markdown_report(report))
     data = {"run_id": run_id, "run_dir": str(run_dir), "run": {"ok": run_ok, "case_count": len(cases), "status_counts": status_counts(case_entries)}, "report_hash": report["report_hash"]}
+    if replayed_from is not None:
+        data["replayed_from"] = replayed_from
+        data["cases_replayed"] = len(cases)
+    return data, all_warnings, run_ok
+
+
+def command_run(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id"}, {"--json", "--no-color", "--fail-on-fail"})
+    if len(args) < 2:
+        raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
+    suite_dir = resolve_suite(args[1])
+    validate_suite(suite_dir)
+    suite = read_json(suite_dir / "suite.json")
+    cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+    jobs = parse_jobs(argv)
+    unsandboxed_warning = {"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}
+    if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
+        print(unsandboxed_warning["message"], file=sys.stderr)
+    run_id = value_after(argv, "--run-id") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ-") + suite.get("name", suite_dir.name)
+    run_dir = Path("evals") / "runs" / run_id
+    if run_dir.exists():
+        manifest_path = run_dir / "manifest.json"
+        if manifest_path.exists():
+            manifest_doc = read_json(manifest_path)
+            if run_identity(suite, suite_dir, cases) != manifest_identity(manifest_doc):
+                existing_count = manifest_doc["suite"]["case_count"]
+                existing_suite = manifest_doc["suite"]["name"]
+                raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed for suite `{existing_suite}`/{existing_count} cases; refusing to reuse for a different suite/case set", "use a fresh --run-id", 5)
+            data = report_data(run_dir)
+            run_summary = {"ok": data["run"]["ok"], "case_count": data["run"]["case_count"], "status_counts": data["run"]["status_counts"]}
+            existing = {"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": run_summary, "report_hash": data["report_hash"]}
+            return print_envelope(existing, json_mode=json_mode, warnings=[unsandboxed_warning], started=started)
+        raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
+    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
+    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
+    return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
+
+
+def parse_replay_source(argv: list[str]) -> Path:
+    if not has_flag(argv, "--failed"):
+        raise EvalctlError("E_CASE_INVALID", "replay requires --failed in v0.2", "try: evalctl replay --failed <run-id> --json", 1)
+    run_dir = value_after(argv, "--run-dir")
+    args = strip_flags(argv, {"--run-dir", "--run-id", "--suite", "--jobs", "--timeout"}, {"--json", "--no-color", "--failed", "--force", "--fail-on-fail"})
+    positional = args[1:] if args and args[0] == "replay" else args
+    if run_dir and positional:
+        raise EvalctlError("E_CASE_INVALID", "replay source must be either a run id or --run-dir, not both", "try: evalctl replay --failed <run-id> --json", 1)
+    if not run_dir and len(positional) != 1:
+        raise EvalctlError("E_CASE_INVALID", "replay requires a source run id or --run-dir", "try: evalctl replay --failed <run-id> --json", 1)
+    path = Path(run_dir) if run_dir else Path("evals") / "runs" / positional[0]
+    if not (path / "manifest.json").exists():
+        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {path}", "try: evalctl run code-review --json", 1)
+    return path
+
+
+def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
+    source_run = parse_replay_source(argv)
+    source_manifest = read_json(source_run / "manifest.json")
+    source_report = report_data(source_run)
+    failed_ids = [case["id"] for case in source_report["cases"] if case["status"] != "pass"]
+    if not failed_ids:
+        warnings = [{"code": "W_NOTHING_TO_REPLAY", "message": "source run has no failed or errored cases"}]
+        data = {"replayed_from": source_manifest["run_id"], "cases_replayed": 0}
+        return print_envelope(data, json_mode=json_mode, human=f"{source_manifest['run_id']}: nothing to replay", warnings=warnings, started=started)
+
+    suite_arg = value_after(argv, "--suite") or source_manifest["suite"]["name"]
+    try:
+        suite_dir = resolve_suite(suite_arg)
+    except EvalctlError as exc:
+        if exc.error["code"] == "E_SUITE_NOT_FOUND":
+            raise EvalctlError("E_SUITE_NOT_FOUND", exc.error["message"], "pass the current suite with --suite <suite-or-path>", 1)
+        raise
+    validate_suite(suite_dir)
+    suite = read_json(suite_dir / "suite.json")
+    current_cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+    current_by_id = {case["id"]: case for case in current_cases}
+    warnings: list[dict[str, Any]] = []
+    target_cases = []
+    for case_id in failed_ids:
+        case = current_by_id.get(case_id)
+        if case is None:
+            warnings.append({"code": "W_REPLAY_CASE_ABSENT", "message": f"case {case_id} is absent from the current suite"})
+        else:
+            target_cases.append(case)
+    if not target_cases:
+        warnings.append({"code": "W_NOTHING_TO_REPLAY", "message": "no selected failed cases exist in the current suite"})
+        data = {"replayed_from": source_manifest["run_id"], "cases_replayed": 0}
+        return print_envelope(data, json_mode=json_mode, human=f"{source_manifest['run_id']}: nothing to replay", warnings=warnings, started=started)
+
+    jobs = parse_jobs(argv)
+    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
+    run_id = value_after(argv, "--run-id") or f"{source_manifest['run_id']}-replay-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')}"
+    run_dir = Path("evals") / "runs" / run_id
+    if run_dir.resolve() == source_run.resolve():
+        raise EvalctlError("E_RUN_CONFLICT", "replay destination must not be the source run", "use a fresh --run-id", 5)
+    if run_dir.exists():
+        if (run_dir / "manifest.json").exists():
+            if not has_flag(argv, "--force"):
+                raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed; refusing to overwrite without --force", "use a fresh --run-id or pass --force", 5)
+            shutil.rmtree(run_dir)
+        else:
+            raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl replay with a new --run-id", 4)
+    if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
+        print("runner commands execute arbitrary local code; evalctl is not a sandbox", file=sys.stderr)
+    data, run_warnings, run_ok = execute_cases(suite_dir, suite, target_cases, run_dir, run_id, jobs, timeout_override, source_manifest["run_id"])
+    all_warnings = run_warnings + warnings
+    commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "inspect replay report"}]
+    print_envelope(data, json_mode=json_mode, human=f"Replay {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
     return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
 
 
@@ -1212,6 +1296,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_validate(argv, json_mode, started)
         if cmd == "run":
             return command_run(argv, json_mode, started)
+        if cmd == "replay":
+            return command_replay(argv, json_mode, started)
         if cmd == "status":
             return command_status(argv, json_mode, started)
         if cmd == "report":
