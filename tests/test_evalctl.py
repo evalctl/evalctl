@@ -126,6 +126,11 @@ class EvalctlCliTests(unittest.TestCase):
 
             copied = cwd / "copied-run"
             shutil.copytree(cwd / "evals" / "runs" / "r1", copied)
+            score_files = sorted(copied.glob("cases/*/score.json"))
+            self.assertGreater(len(score_files), 1)
+            score_files[0].unlink()
+            for score_file in score_files[1:]:
+                score_file.write_text("not json\n")
             shutil.rmtree(cwd / "evals")
             replay = self.envelope(["report", "--run-dir", str(copied), "--format", "json"], cwd)
             self.assertEqual(replay["data"]["report_hash"], original_hash)
@@ -363,6 +368,50 @@ class EvalctlCliTests(unittest.TestCase):
             report = self.envelope(["report", "trunc-output", "--format", "json"], cwd)
             self.assertEqual(report["data"]["report_hash"], run["data"]["report_hash"])
             self.assertTrue(report["data"]["run"]["ok"])
+
+    def test_scorer_matrix_and_advisory_aggregation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            cases = [
+                {"id": "exact-case", "task": "exact", "workspace": "fixtures/cr-pass", "expect": {"exact": "exact ok", "text_contains": ["optional missing"]}},
+                {"id": "regex-case", "task": "regex", "workspace": "fixtures/cr-pass", "expect": {"text_regex": ["^regex [0-9]+$"]}},
+                {"id": "json-case", "task": "json", "workspace": "fixtures/cr-pass", "expect": {"json_schema": {}}},
+                {"id": "numeric-case", "task": "numeric", "workspace": "fixtures/cr-pass", "expect": {"numeric_threshold": {"path": "score", "gte": 0.8}}},
+            ]
+            self.write_cases(cwd, cases)
+            suite = self.load_suite(cwd)
+            runner = (
+                "import json, os, pathlib\n"
+                "case = json.load(open(os.environ['EVALCTL_CASE_FILE']))\n"
+                "outputs = {\n"
+                "  'exact-case': 'exact ok',\n"
+                "  'regex-case': 'regex 42',\n"
+                "  'json-case': '{\"ok\": true}',\n"
+                "  'numeric-case': '{\"score\": 0.9}',\n"
+                "}\n"
+                "pathlib.Path(os.environ['EVALCTL_OUTPUT_FILE']).write_text(outputs[case['id']])\n"
+            )
+            suite["runner"]["argv"] = [sys.executable, "-c", runner]
+            suite["scorers"] = [
+                {"name": "exact", "required": True},
+                {"name": "regex", "required": True},
+                {"name": "json-schema", "required": True},
+                {"name": "numeric-threshold", "required": True},
+                {"name": "contains", "required": False},
+            ]
+            self.write_suite(cwd, suite)
+
+            run = self.envelope(["run", "code-review", "--run-id", "scorers", "--json"], cwd)
+            self.assertTrue(run["data"]["run"]["ok"])
+            report = self.envelope(["report", "scorers", "--format", "json"], cwd)
+            self.assertTrue(report["data"]["run"]["ok"])
+            self.assertEqual(report["data"]["failures"], [])
+
+            exact_score = json.loads((cwd / "evals" / "runs" / "scorers" / "cases" / "exact-case" / "score.json").read_text())
+            advisory = [score for score in exact_score["scores"] if score["scorer"] == "contains"][0]
+            self.assertFalse(advisory["ok"])
+            self.assertFalse(advisory["required"])
 
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
