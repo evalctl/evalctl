@@ -10,6 +10,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -266,6 +267,13 @@ per-case `runner.json.error_code` reason codes. A runner timeout or spawn failur
 is reportable case data: `run` exits 0 by default, exits 6 with `--fail-on-fail`,
 emits `W_PARTIAL_RUN`, and does not put the runner reason code in `errors[]`.
 
+## Artifact writes
+
+JSON artifacts are written by creating a temporary file in the target directory
+and replacing the final path with `os.replace`. This guarantees atomic visibility:
+readers never see a half-written final JSON file. It is not a full crash-durable
+guarantee; v0.1.1 does not fsync files or directories.
+
 ## Deferred
 
 Async queueing, crash resume, execution replay, compare, command scorers, mutating suite/case/scorer add verbs, inferctl route capture, and LLM-as-judge scoring are roadmap items, not v0.1 commands.
@@ -446,8 +454,22 @@ def apply_redaction(text: str, patterns: list[str], values: list[str]) -> tuple[
     return text, changed
 
 
+def _atomic_write(path: Path, text: str, *, _writer: Any | None = None) -> None:
+    writer = _writer or (lambda tmp_path, value: tmp_path.write_text(value))
+    tmp_name = None
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as tmp:
+        tmp_name = tmp.name
+    tmp_path = Path(tmp_name)
+    try:
+        writer(tmp_path, text)
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def write_json(path: Path, data: Any) -> None:
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def render_runner_arg(arg: str, env: dict[str, str]) -> str:

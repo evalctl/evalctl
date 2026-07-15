@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from evalctl import cli
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CMD = [sys.executable, "-m", "evalctl"]
@@ -136,6 +138,27 @@ class EvalctlCliTests(unittest.TestCase):
             conflict = self.run_cli(["init", "--json"], cwd, expect=5)
             conflict_payload = json.loads(conflict.stdout)
             self.assertEqual(conflict_payload["errors"][0]["code"], "E_RUN_CONFLICT")
+
+    def test_atomic_write_keeps_final_json_intact_on_temp_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "manifest.json"
+            target.write_text('{"old": true}\n')
+
+            def fail_after_temp_write(tmp_path: Path, text: str) -> None:
+                tmp_path.write_text(text[:5])
+                raise RuntimeError("simulated write failure")
+
+            with self.assertRaises(RuntimeError):
+                cli._atomic_write(target, '{"new": true}\n', _writer=fail_after_temp_write)
+
+            self.assertEqual(target.read_text(), '{"old": true}\n')
+            self.assertEqual(list(Path(td).glob("*.tmp")), [])
+
+            absent = Path(td) / "absent.json"
+            with self.assertRaises(RuntimeError):
+                cli._atomic_write(absent, '{"new": true}\n', _writer=fail_after_temp_write)
+            self.assertFalse(absent.exists())
+            self.assertEqual(list(Path(td).glob("*.tmp")), [])
 
     def test_fail_on_fail_uses_exit_six_with_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as td:
