@@ -49,6 +49,9 @@ CODE_REGISTRY = {
     "E_RUN_CORRUPT": {"class": "user-input", "exit": 1, "where": ["resume"], "retryable": False, "surface": "envelope"},
     "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
+    "E_SPOOLCTL_UNAVAILABLE": {"class": "tool-env", "exit": 3, "where": ["run", "resume"], "retryable": False, "surface": "envelope"},
+    "E_SPOOLCTL_INCOMPATIBLE": {"class": "tool-env", "exit": 3, "where": ["run", "resume"], "retryable": False, "surface": "envelope"},
+    "E_JOB_TRANSIENT": {"class": "transient", "exit": 4, "where": ["run", "resume"], "retryable": True, "surface": "envelope"},
     "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
     "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
     "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run", "resume"], "retryable": True, "surface": "envelope"},
@@ -665,6 +668,60 @@ def parse_positive_int_flag(argv: list[str], flag: str, default: int) -> int:
     return value
 
 
+def version_tuple(value: str) -> tuple[int, ...]:
+    parts = []
+    for item in value.split("."):
+        match = re.match(r"(\d+)", item)
+        parts.append(int(match.group(1)) if match else 0)
+    return tuple(parts)
+
+
+def spoolctl_binary() -> str:
+    path = shutil.which("spoolctl")
+    if not path:
+        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", "spoolctl is not available on PATH", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
+    return path
+
+
+def spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None) -> dict[str, Any]:
+    allow_exit_codes = allow_exit_codes or {0}
+    try:
+        result = subprocess.run([spoolctl_binary(), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as exc:
+        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", f"could not run spoolctl: {exc}", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
+    if result.returncode == 4:
+        raise EvalctlError("E_JOB_TRANSIENT", "spoolctl reported a transient job-system failure", "retry the queued run or resume it later", 4)
+    if result.returncode not in allow_exit_codes:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl command failed: {result.stderr.strip() or result.stdout.strip()}", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl returned invalid JSON: {exc.msg}", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
+    if isinstance(payload, dict) and "ok" in payload:
+        if not payload.get("ok") and result.returncode != 6:
+            raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl returned an error envelope", "inspect spoolctl output or drop --queue spoolctl", 3)
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {"value": data}
+    if isinstance(payload, dict):
+        return payload
+    raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl JSON output must be an object", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
+
+
+def probe_spoolctl() -> dict[str, Any]:
+    data = spoolctl_json(["capabilities", "--json"])
+    version = str(data.get("version") or data.get("tool_version") or "")
+    contract = str(data.get("contract_version") or "")
+    verbs = data.get("verbs", {})
+    add_flags = set()
+    if isinstance(verbs, dict):
+        add_info = verbs.get("add", {})
+        if isinstance(add_info, dict):
+            add_flags = set(add_info.get("flags", []))
+    if version_tuple(version) < (0, 4, 1) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl is missing required evalctl queue capabilities", "upgrade spoolctl to >= 0.4.1", 3)
+    return data
+
+
 def render_runner_arg(arg: str, env: dict[str, str]) -> str:
     for key, value in env.items():
         arg = arg.replace(f"${key}", value)
@@ -1067,6 +1124,115 @@ def capture_workspace_after_and_score(prepared: dict[str, Any], output_text: str
     score_doc = {"case_id": case["id"], "status": status, "ok": status == "pass", "scores": scores}
     write_json(case_dir / "score.json", score_doc)
     return case_manifest_entry(case, status, scores), warnings
+
+
+def spoolctl_runner_command(prepared: dict[str, Any]) -> list[str]:
+    runner = prepared["runner"]
+    eval_env = prepared["eval_env"]
+    if runner.get("shell", False):
+        command = render_runner_arg(runner["command"], eval_env)
+        if runner.get("stdin") == "task":
+            command = f"exec {command} < \"$EVALCTL_TASK_FILE\""
+        return ["sh", "-c", command]
+    argv = [render_runner_arg(str(a), eval_env) for a in runner["argv"]]
+    if runner.get("stdin") != "task":
+        return argv
+    wrapper = (
+        "import os, subprocess, sys\n"
+        "with open(os.environ['EVALCTL_TASK_FILE']) as stdin:\n"
+        "    raise SystemExit(subprocess.call(sys.argv[1:], stdin=stdin))\n"
+    )
+    return [sys.executable, "-c", wrapper, *argv]
+
+
+def spoolctl_add_case(db_path: Path, run_id: str, prepared: dict[str, Any]) -> str:
+    case_id = prepared["case"]["id"]
+    args = [
+        "add", "--db", str(db_path), "--json", "--queue", "evalctl",
+        "--key", f"{run_id}:{case_id}",
+        "--tag", f"evalctl_run={run_id}",
+        "--tag", f"evalctl_case={case_id}",
+        "--cwd", str(prepared["cwd"]),
+        "--timeout", str(prepared["timeout"]),
+        "--max-retries", "0",
+        "--max-crashes", "0",
+    ]
+    for key, value in sorted(prepared["eval_env"].items()):
+        args.extend(["--env", f"{key}={value}"])
+    args.append("--")
+    args.extend(spoolctl_runner_command(prepared))
+    data = spoolctl_json(args)
+    job_id = str(data.get("job_id") or data.get("id") or "")
+    if not job_id:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl add did not return data.job_id", "upgrade spoolctl to >= 0.4.1", 3)
+    write_json(prepared["case_dir"] / "job.json", {"job_id": job_id, "state": data.get("state", "queued")})
+    return job_id
+
+
+def latest_terminal_attempt(job_detail: dict[str, Any]) -> dict[str, Any]:
+    attempts = job_detail.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl show did not include attempts", "upgrade spoolctl to >= 0.4.1", 3)
+    return attempts[-1]
+
+
+def runner_result_from_spoolctl_attempt(attempt: dict[str, Any], max_bytes: int) -> dict[str, Any]:
+    stdout_path = attempt.get("stdout_path")
+    stderr_path = attempt.get("stderr_path")
+    stdout = Path(stdout_path).read_text(errors="replace") if stdout_path else ""
+    stderr = Path(stderr_path).read_text(errors="replace") if stderr_path else str(attempt.get("error") or "")
+    state = attempt.get("state")
+    exit_code = attempt.get("exit_code")
+    timed_out = state == "timed_out" and exit_code is None
+    spawn_failed = exit_code is None and (state in {"failed", "abandoned", "canceled"} or str(attempt.get("error") or "").startswith("spawn failed:"))
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": timed_out,
+        "spawn_failed": spawn_failed,
+        "exit_code": exit_code,
+        "signal": None,
+        "duration_ms": int(attempt.get("duration_ms") or 0),
+    }
+
+
+def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_cases: list[dict[str, Any]], pending_cases: list[dict[str, Any]],
+                                   completed_entries: dict[str, dict[str, Any]], run_dir: Path, run_id: str,
+                                   jobs: int, timeout_override: int | None, slots: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    db_path = run_dir / ".spoolctl.db"
+    clean_pending_case_dirs(run_dir, pending_cases)
+    prepared_by_case: dict[str, dict[str, Any]] = {}
+    job_ids: list[str] = []
+    for case in sorted(pending_cases, key=lambda c: c["id"]):
+        prepared = prepare_case_workspace(suite_dir, suite, case, run_dir, timeout_override)
+        prepared_by_case[case["id"]] = prepared
+        job_ids.append(spoolctl_add_case(db_path, run_id, prepared))
+    worker = subprocess.Popen([spoolctl_binary(), "work", "--db", str(db_path), "--queue", "evalctl", "--slots", str(slots), "--drain"],
+                              text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    wait_data = spoolctl_json(["wait", "--db", str(db_path), "--json", *job_ids], allow_exit_codes={0, 6})
+    worker_stdout, worker_stderr = worker.communicate(timeout=60)
+    if worker.returncode == 4:
+        raise EvalctlError("E_JOB_TRANSIENT", "spoolctl worker reported a transient failure", "retry the queued run or resume it later", 4)
+    if worker.returncode not in {0, None}:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl worker failed: {worker_stderr or worker_stdout}", "inspect spoolctl worker output", 3)
+    warnings: list[dict[str, Any]] = []
+    entries_by_id = dict(completed_entries)
+    for case in sorted(pending_cases, key=lambda c: c["id"]):
+        prepared = prepared_by_case[case["id"]]
+        job_doc = read_json(prepared["case_dir"] / "job.json")
+        detail = spoolctl_json(["show", "--db", str(db_path), "--json", job_doc["job_id"]])
+        attempt = latest_terminal_attempt(detail)
+        runner_result = runner_result_from_spoolctl_attempt(attempt, prepared["max_bytes"])
+        output_text, runner_json, normalize_warnings = normalize_runner_artifacts(prepared, runner_result)
+        warnings.extend(prepared["warnings"])
+        warnings.extend(normalize_warnings)
+        entry, score_warnings = capture_workspace_after_and_score(prepared, output_text, runner_json)
+        warnings.extend(score_warnings)
+        write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
+        write_json(prepared["case_dir"] / "job.json", {"job_id": job_doc["job_id"], "state": detail.get("state") or attempt.get("state")})
+        entries_by_id[case["id"]] = entry
+    case_entries = [entries_by_id[case["id"]] for case in sorted(all_cases, key=lambda c: c["id"])]
+    return case_entries, warnings
 
 
 def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, timeout_override: int | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1656,14 +1822,19 @@ def execute_pending_cases(suite_dir: Path, suite: dict[str, Any], all_cases: lis
 
 def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
                   jobs: int, timeout_override: int | None, replayed_from: str | None,
-                  reservation_ttl: int = DEFAULT_RESERVATION_TTL_SECONDS) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+                  reservation_ttl: int = DEFAULT_RESERVATION_TTL_SECONDS,
+                  queue_backend: str | None = None, slots: int | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
-    metadata = build_run_metadata(suite, suite_dir, cases, run_id, jobs, timeout_override, replayed_from)
+    queue = {"backend": "spoolctl", "db": ".spoolctl.db", "jobs": {}} if queue_backend == "spoolctl" else None
+    metadata = build_run_metadata(suite, suite_dir, cases, run_id, slots or jobs, timeout_override, replayed_from, queue=queue, mode="queued" if queue_backend == "spoolctl" else "synchronous")
     write_run_metadata_once(run_dir, metadata)
     all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
     with ReservationHeartbeat(run_dir, run_id, reservation_ttl):
-        case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, jobs, timeout_override)
+        if queue_backend == "spoolctl":
+            case_entries, run_warnings = execute_spoolctl_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, run_id, jobs, timeout_override, slots or jobs)
+        else:
+            case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, jobs, timeout_override)
         all_warnings.extend(run_warnings)
         if any(c["status"] == "error" for c in case_entries):
             all_warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
@@ -1676,14 +1847,23 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     resume_id = value_after(argv, "--resume")
     if resume_id is not None:
         return command_run_resume(argv, resume_id, json_mode, started)
-    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id", "--reservation-ttl"}, {"--json", "--no-color", "--fail-on-fail"})
+    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id", "--reservation-ttl", "--queue", "--slots"}, {"--json", "--no-color", "--fail-on-fail"})
     if len(args) < 2:
         raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
+    queue_backend = value_after(argv, "--queue")
+    slots_raw = value_after(argv, "--slots")
+    if slots_raw is not None and queue_backend is None:
+        raise EvalctlError("E_CASE_INVALID", "--slots requires --queue spoolctl", "try: evalctl run code-review --queue spoolctl --slots 4 --json", 1)
+    if queue_backend is not None and queue_backend != "spoolctl":
+        raise EvalctlError("E_CASE_INVALID", f"unsupported queue backend: {queue_backend}", "supported value: --queue spoolctl", 1)
+    if queue_backend == "spoolctl":
+        probe_spoolctl()
     suite_dir = resolve_suite(args[1])
     validate_suite(suite_dir)
     suite = read_json(suite_dir / "suite.json")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
     jobs = parse_jobs(argv)
+    slots = parse_positive_int_flag(argv, "--slots", jobs) if queue_backend == "spoolctl" else None
     reservation_ttl = parse_positive_int_flag(argv, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS)
     unsandboxed_warning = {"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}
     if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
@@ -1707,7 +1887,7 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
             raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
         raise EvalctlError("E_RUN_BUSY", f"run {run_id} is incomplete and may be resumable", f"retry with: evalctl run --resume {run_id} --json", 4)
     timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
-    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl)
+    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
     return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
@@ -1743,9 +1923,15 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
     reservation_ttl = parse_positive_int_flag(argv, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS)
     jobs = int(metadata["execution"]["jobs"])
     timeout_override = int(metadata["execution"]["timeout_seconds"])
+    queued = metadata["execution"].get("mode") == "queued" and metadata.get("queue", {}).get("backend") == "spoolctl"
+    if queued:
+        probe_spoolctl()
     with ReservationHeartbeat(run_dir, run_id, reservation_ttl):
         if pending_cases:
-            case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, jobs, timeout_override)
+            if queued:
+                case_entries, run_warnings = execute_spoolctl_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, run_id, jobs, timeout_override, jobs)
+            else:
+                case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, jobs, timeout_override)
             warnings.extend(run_warnings)
         else:
             case_entries = [completed_entries[case["id"]] for case in sorted(cases, key=lambda c: c["id"])]

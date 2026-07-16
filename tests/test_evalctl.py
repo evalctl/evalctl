@@ -105,13 +105,88 @@ class EvalctlCliTests(unittest.TestCase):
         for case_id in ("cr-fail", "cr-pass"):
             (self.suite_path(cwd) / "fixtures" / case_id / "runner.py").write_text(runner)
 
+    def install_fake_spoolctl(self, cwd: Path, *, version: str = "0.4.1") -> Path:
+        bindir = cwd / "bin"
+        bindir.mkdir()
+        script = bindir / "spoolctl"
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, subprocess, sys, time\n"
+            "from pathlib import Path\n"
+            f"VERSION = {version!r}\n"
+            "def emit(data, code=0):\n"
+            "    print(json.dumps({'ok': True, 'data': data}, sort_keys=True))\n"
+            "    raise SystemExit(code)\n"
+            "def load(db):\n"
+            "    p = Path(db)\n"
+            "    if not p.exists(): return {'jobs': {}, 'keys': {}}\n"
+            "    return json.loads(p.read_text())\n"
+            "def save(db, data):\n"
+            "    p = Path(db); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(data, sort_keys=True))\n"
+            "args = sys.argv[1:]\n"
+            "if args[:2] == ['capabilities', '--json']:\n"
+            "    emit({'version': VERSION, 'contract_version': '1', 'verbs': {'add': {'flags': ['--cwd', '--env', '--max-crashes']}}})\n"
+            "cmd = args[0] if args else ''\n"
+            "if os.environ.get('FAKE_SPOOLCTL_TRANSIENT') and cmd == 'wait':\n"
+            "    print(json.dumps({'ok': False, 'errors': [{'code': 'TRANSIENT'}]})); raise SystemExit(4)\n"
+            "def val(flag):\n"
+            "    return args[args.index(flag)+1]\n"
+            "if cmd == 'add':\n"
+            "    db = val('--db'); key = val('--key'); cwd = val('--cwd'); timeout = int(val('--timeout'))\n"
+            "    sep = args.index('--'); command = args[sep+1:]\n"
+            "    env = {}\n"
+            "    i = 0\n"
+            "    while i < sep:\n"
+            "        if args[i] == '--env':\n"
+            "            k, v = args[i+1].split('=', 1); env[k] = v; i += 2\n"
+            "        else: i += 1\n"
+            "    data = load(db)\n"
+            "    if key in data['keys']:\n"
+            "        job_id = data['keys'][key]\n"
+            "    else:\n"
+            "        job_id = 'job-' + str(len(data['jobs']) + 1); data['keys'][key] = job_id\n"
+            "        data['jobs'][job_id] = {'id': job_id, 'key': key, 'cwd': cwd, 'env': env, 'command': command, 'timeout': timeout, 'state': 'queued', 'attempts': []}\n"
+            "        save(db, data)\n"
+            "    emit({'job_id': job_id, 'state': data['jobs'][job_id]['state']})\n"
+            "if cmd == 'work':\n"
+            "    db = val('--db'); data = load(db)\n"
+            "    base = Path(db).parent\n"
+            "    for job in data['jobs'].values():\n"
+            "        if job['state'] not in ('queued', 'running'): continue\n"
+            "        out = base / (job['id'] + '.stdout.txt'); err = base / (job['id'] + '.stderr.txt')\n"
+            "        env = os.environ.copy(); env.update(job['env'])\n"
+            "        start = time.time()\n"
+            "        try:\n"
+            "            res = subprocess.run(job['command'], cwd=job['cwd'], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=job['timeout'])\n"
+            "            out.write_text(res.stdout); err.write_text(res.stderr)\n"
+            "            state = 'succeeded' if res.returncode == 0 else 'failed'; exit_code = res.returncode; error = None\n"
+            "        except subprocess.TimeoutExpired as exc:\n"
+            "            out.write_text((exc.stdout or '') if isinstance(exc.stdout, str) else (exc.stdout or b'').decode('utf-8', 'replace'))\n"
+            "            err.write_text((exc.stderr or '') if isinstance(exc.stderr, str) else (exc.stderr or b'').decode('utf-8', 'replace'))\n"
+            "            state = 'timed_out'; exit_code = None; error = 'timed out'\n"
+            "        except OSError as exc:\n"
+            "            out.write_text(''); err.write_text(str(exc)); state = 'failed'; exit_code = None; error = 'spawn failed: ' + str(exc)\n"
+            "        job['state'] = state\n"
+            "        job['attempts'] = [{'state': state, 'exit_code': exit_code, 'error': error, 'stdout_path': str(out), 'stderr_path': str(err), 'duration_ms': int((time.time()-start)*1000)}]\n"
+            "    save(db, data); emit({'drained': True})\n"
+            "if cmd == 'wait':\n"
+            "    db = val('--db'); data = load(db); ids = [a for a in args[args.index('--json')+1:] if not a.startswith('--')]\n"
+            "    all_succeeded = all(data['jobs'][j]['state'] == 'succeeded' for j in ids)\n"
+            "    emit({'all_succeeded': all_succeeded, 'jobs': [data['jobs'][j] for j in ids]}, 0 if all_succeeded else 6)\n"
+            "if cmd == 'show':\n"
+            "    db = val('--db'); job_id = args[-1]; emit(load(db)['jobs'][job_id])\n"
+            "print('bad fake spoolctl invocation', args, file=sys.stderr); raise SystemExit(2)\n"
+        )
+        script.chmod(0o755)
+        return bindir
+
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:8c9c7b83dc91e7cec32280d591f95d3463691a33299901ad7328962191619a71")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:f815770277c6989328fde85bd7fc4d4331a38bcf4a735d12727e472d3e61ea6a")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": True})
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
@@ -376,6 +451,89 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertFalse((prepared["case_dir"] / "state.json").exists())
             cli.write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
             self.assertTrue((prepared["case_dir"] / "state.json").exists())
+
+    def test_queue_spoolctl_matches_in_process_and_validates_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = self.install_fake_spoolctl(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            in_process = self.envelope(["run", "code-review", "--run-id", "sync", "--json"], cwd)
+            queued = self.envelope(["run", "code-review", "--run-id", "queued", "--queue", "spoolctl", "--slots", "2", "--json"], cwd, extra_env=queue_env)
+            self.assertEqual(queued["data"]["report_hash"], in_process["data"]["report_hash"])
+            manifest = json.loads((cwd / "evals" / "runs" / "queued" / "manifest.json").read_text())
+            self.assertEqual(manifest["execution"]["mode"], "queued")
+            self.assertEqual(manifest["queue"]["backend"], "spoolctl")
+            self.assertTrue((cwd / "evals" / "runs" / "queued" / ".spoolctl.db").exists())
+            self.assertTrue(list((cwd / "evals" / "runs" / "queued" / "cases").glob("*/job.json")))
+
+            missing = self.run_cli(["run", "code-review", "--run-id", "missing", "--queue", "spoolctl", "--json"], cwd, expect=3, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(json.loads(missing.stdout)["errors"][0]["code"], "E_SPOOLCTL_UNAVAILABLE")
+            bad_slots = self.run_cli(["run", "code-review", "--run-id", "slots", "--slots", "2", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_slots.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = self.install_fake_spoolctl(cwd, version="0.4.0")
+            incompatible = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=3, extra_env={"PATH": str(bindir)})
+            self.assertEqual(json.loads(incompatible.stdout)["errors"][0]["code"], "E_SPOOLCTL_INCOMPATIBLE")
+
+    def test_queue_spoolctl_outcome_mapping_and_stdin_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = self.install_fake_spoolctl(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            self.keep_first_case_only(cwd)
+            suite = self.load_suite(cwd)
+            suite["runner"]["argv"] = [sys.executable, "-c", "import sys; sys.exit(7)"]
+            suite["scorers"] = [{"name": "exit-code", "required": True}]
+            self.write_suite(cwd, suite)
+            cases = self.load_cases(cwd)
+            cases[0]["expect"] = {"exit_code": 7}
+            self.write_cases(cwd, cases)
+            nonzero = self.envelope(["run", "code-review", "--run-id", "nonzero", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            self.assertTrue(nonzero["data"]["run"]["ok"])
+            runner_json = json.loads((cwd / "evals" / "runs" / "nonzero" / "cases" / cases[0]["id"] / "runner.json").read_text())
+            self.assertEqual(runner_json["exit_code"], 7)
+            self.assertIsNone(runner_json["error_code"])
+
+            suite["runner"]["argv"] = [sys.executable, "-c", "import time; time.sleep(2)"]
+            suite["runner"]["timeout_seconds"] = 1
+            self.write_suite(cwd, suite)
+            timeout = self.envelope(["run", "code-review", "--run-id", "timeout-q", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            self.assertEqual(timeout["data"]["run"]["status_counts"]["error"], 1)
+            timed_runner = json.loads((cwd / "evals" / "runs" / "timeout-q" / "cases" / cases[0]["id"] / "runner.json").read_text())
+            self.assertEqual(timed_runner["error_code"], "E_RUNNER_TIMEOUT")
+
+            suite["runner"]["argv"] = ["evalctl-missing-spool-runner"]
+            suite["runner"]["timeout_seconds"] = 30
+            self.write_suite(cwd, suite)
+            spawn = self.envelope(["run", "code-review", "--run-id", "spawn-q", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            self.assertEqual(spawn["data"]["run"]["status_counts"]["error"], 1)
+            spawn_runner = json.loads((cwd / "evals" / "runs" / "spawn-q" / "cases" / cases[0]["id"] / "runner.json").read_text())
+            self.assertEqual(spawn_runner["error_code"], "E_RUNNER_FAILED")
+
+            transient = self.run_cli(["run", "code-review", "--run-id", "transient", "--queue", "spoolctl", "--json"], cwd, expect=4, extra_env={**queue_env, "FAKE_SPOOLCTL_TRANSIENT": "1"})
+            self.assertEqual(json.loads(transient.stdout)["errors"][0]["code"], "E_JOB_TRANSIENT")
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            self.envelope(["suite", "add", "stdin-demo", "--runner-argv", f"{sys.executable} $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+            suite_dir = cwd / "evals" / "suites" / "stdin-demo"
+            fixture = suite_dir / "fixtures" / "x"
+            fixture.mkdir(parents=True)
+            (fixture / "r.py").write_text("from pathlib import Path\nimport os, sys\ntext=sys.stdin.read()\nPath(os.environ['EVALCTL_OUTPUT_FILE']).write_text(text)\n")
+            suite = json.loads((suite_dir / "suite.json").read_text())
+            suite["runner"]["stdin"] = "task"
+            (suite_dir / "suite.json").write_text(json.dumps(suite, indent=2, sort_keys=True) + "\n")
+            self.envelope(["case", "add", "stdin-demo", "--id", "x", "--task", "hello stdin", "--workspace", "fixtures/x", "--expect-json", '{"exact":"hello stdin"}', "--json"], cwd)
+            self.envelope(["scorer", "add", "stdin-demo", "--name", "exact", "--required", "--json"], cwd)
+            stdin_run = self.envelope(["run", "stdin-demo", "--run-id", "stdin-q", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            self.assertTrue(stdin_run["data"]["run"]["ok"])
 
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
