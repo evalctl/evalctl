@@ -178,6 +178,7 @@ COMMANDS:
   init [--force]                   Scaffold evals/ with code-review suite
   validate [suite] [--json]        Validate suite files
   run <suite> [--jobs N] [--timeout S] [--run-id ID] [--fail-on-fail] [--json]
+  jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
   suite add <name> [--runner-argv ARGV|--runner-command CMD --shell] [--json]
   case add <suite> --task TEXT --workspace PATH [--id ID] [--diff PATH] [--expect-json JSON] [--json]
@@ -1690,6 +1691,111 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
     return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
 
 
+def runs_root() -> Path:
+    return Path("evals") / "runs"
+
+
+def stored_queue_jobs(run_dir: Path) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    for path in sorted((run_dir / "cases").glob("*/job.json")):
+        try:
+            data = read_json(path)
+        except Exception:
+            continue
+        case_id = path.parent.name
+        job_id = data.get("job_id") if isinstance(data, dict) else None
+        if job_id is not None:
+            jobs.append({"case_id": case_id, "job_id": job_id, "state": data.get("state"), "spoolctl_available": shutil.which("spoolctl") is not None})
+    return jobs
+
+
+def run_case_counts(run_dir: Path) -> dict[str, int]:
+    case_count = 0
+    suite_dir = run_dir / "suite-snapshot"
+    if suite_dir.exists():
+        try:
+            suite = read_json(suite_dir / "suite.json")
+            case_count = len(load_cases(suite_dir / suite.get("cases", "cases.jsonl")))
+        except Exception:
+            case_count = 0
+    marker_count = terminal_marker_count(run_dir)
+    if case_count == 0:
+        case_count = len(list((run_dir / "cases").glob("*")))
+    return {"case_count": case_count, "terminal": marker_count, "pending": max(case_count - marker_count, 0)}
+
+
+def classify_run_dir(run_dir: Path) -> dict[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    reservation = read_reservation(run_dir)
+    reservation_live = bool(reservation and reservation_is_live(reservation))
+    if manifest_path.exists():
+        state = "completed"
+    elif reservation_live:
+        state = "running"
+    elif reservation is not None:
+        state = "stale"
+    else:
+        state = "orphaned"
+    data: dict[str, Any] = {
+        "run_id": run_dir.name,
+        "run_dir": str(run_dir),
+        "state": state,
+        "reservation": {"present": reservation is not None, "live": reservation_live},
+        "cases": run_case_counts(run_dir),
+        "queue_jobs": stored_queue_jobs(run_dir),
+    }
+    if manifest_path.exists():
+        try:
+            report = report_data(run_dir)
+            data["run"] = report["run"]
+            data["report_hash"] = report["report_hash"]
+        except Exception:
+            pass
+    return data
+
+
+def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, set(), {"--json", "--no-color", "--yes", "--force"})
+    if len(args) < 2:
+        raise EvalctlError("E_CASE_INVALID", "jobs requires list, get, or prune", "try: evalctl jobs list --json", 1)
+    subcommand = args[1]
+    root = runs_root()
+    run_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name) if root.exists() else []
+    if subcommand == "list":
+        runs = [classify_run_dir(path) for path in run_dirs]
+        return print_envelope({"runs": runs, "count": len(runs)}, json_mode=json_mode, human="\n".join(f"{r['run_id']}\t{r['state']}" for r in runs), started=started)
+    if subcommand == "get":
+        if len(args) != 3:
+            raise EvalctlError("E_CASE_INVALID", "jobs get requires a run id", "try: evalctl jobs get <run-id> --json", 1)
+        run_dir = root / args[2]
+        if not run_dir.exists():
+            raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {args[2]}", "try: evalctl jobs list --json", 1)
+        data = classify_run_dir(run_dir)
+        return print_envelope(data, json_mode=json_mode, human=f"{data['run_id']}: {data['state']}", started=started)
+    if subcommand == "prune":
+        confirmed = has_flag(argv, "--yes") or has_flag(argv, "--force")
+        stale = [classify_run_dir(path) for path in run_dirs if classify_run_dir(path)["state"] == "stale"]
+        orphaned = [classify_run_dir(path) for path in run_dirs if classify_run_dir(path)["state"] == "orphaned"]
+        refused = [classify_run_dir(path) for path in run_dirs if classify_run_dir(path)["state"] in {"completed", "running"}]
+        removed_reservations: list[str] = []
+        removed_runs: list[str] = []
+        if confirmed:
+            for item in stale:
+                clear_reservation(Path(item["run_dir"]))
+                removed_reservations.append(item["run_id"])
+            for item in orphaned:
+                shutil.rmtree(item["run_dir"], ignore_errors=True)
+                removed_runs.append(item["run_id"])
+        data = {
+            "confirmed": confirmed,
+            "candidates": {"stale_reservations": [item["run_id"] for item in stale], "orphaned_runs": [item["run_id"] for item in orphaned]},
+            "removed": {"reservations": removed_reservations, "runs": removed_runs},
+            "refused": [{"run_id": item["run_id"], "state": item["state"]} for item in refused],
+        }
+        return print_envelope(data, json_mode=json_mode, human=json.dumps(data, indent=2, sort_keys=True), started=started)
+    raise EvalctlError("E_CASE_INVALID", f"unknown jobs subcommand '{subcommand}'", "try: evalctl jobs list --json", 1)
+
+
 def parse_replay_source(argv: list[str]) -> Path:
     if not has_flag(argv, "--failed"):
         raise EvalctlError("E_CASE_INVALID", "replay requires --failed in v0.2", "try: evalctl replay --failed <run-id> --json", 1)
@@ -1899,6 +2005,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_scorer_add(argv, json_mode, started)
         if cmd == "run":
             return command_run(argv, json_mode, started)
+        if cmd == "jobs":
+            return command_jobs(argv, json_mode, started)
         if cmd == "replay":
             return command_replay(argv, json_mode, started)
         if cmd == "status":

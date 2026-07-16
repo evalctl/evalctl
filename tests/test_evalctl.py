@@ -287,6 +287,72 @@ class EvalctlCliTests(unittest.TestCase):
             bad = self.run_cli(["run", "--resume", "corrupt", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(bad.stdout)["errors"][0]["code"], "E_RUN_CORRUPT")
 
+    def test_jobs_list_get_and_prune_run_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "completed", "--json"], cwd)
+            runs = cwd / "evals" / "runs"
+
+            live = runs / "live"
+            live.mkdir(parents=True)
+            cli.write_json(live / ".reservation.json", {
+                "run_id": "live",
+                "pid": 123,
+                "host": "test",
+                "started_ts": cli.now_iso(),
+                "heartbeat_ts": cli.now_iso(),
+                "ttl_seconds": 3600,
+            })
+
+            stale = runs / "stale"
+            (stale / "cases" / "case-a").mkdir(parents=True)
+            cli.write_json(stale / ".reservation.json", {
+                "run_id": "stale",
+                "pid": 123,
+                "host": "test",
+                "started_ts": "1970-01-01T00:00:00Z",
+                "heartbeat_ts": "1970-01-01T00:00:00Z",
+                "ttl_seconds": 1,
+            })
+            cli.write_json(stale / "cases" / "case-a" / "job.json", {"job_id": "job-1", "state": "queued"})
+            (stale / ".spoolctl.db").write_text("queue state\n")
+
+            orphaned = runs / "orphaned"
+            orphaned.mkdir()
+
+            listed = self.envelope(["jobs", "list", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            by_id = {item["run_id"]: item for item in listed["data"]["runs"]}
+            self.assertEqual(by_id["completed"]["state"], "completed")
+            self.assertEqual(by_id["live"]["state"], "running")
+            self.assertEqual(by_id["stale"]["state"], "stale")
+            self.assertEqual(by_id["orphaned"]["state"], "orphaned")
+            self.assertEqual(by_id["stale"]["queue_jobs"], [{"case_id": "case-a", "job_id": "job-1", "state": "queued", "spoolctl_available": False}])
+
+            got = self.envelope(["jobs", "get", "completed", "--json"], cwd)
+            self.assertEqual(got["data"]["state"], "completed")
+            self.assertEqual(got["data"]["cases"]["terminal"], 2)
+
+            bad_get = self.run_cli(["jobs", "get", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_get.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            bad_subcommand = self.run_cli(["jobs", "wat", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_subcommand.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+
+            dry = self.envelope(["jobs", "prune", "--json"], cwd)
+            self.assertFalse(dry["data"]["confirmed"])
+            self.assertTrue((stale / ".reservation.json").exists())
+            self.assertTrue(orphaned.exists())
+
+            pruned = self.envelope(["jobs", "prune", "--yes", "--json"], cwd)
+            self.assertEqual(pruned["data"]["removed"]["reservations"], ["stale"])
+            self.assertEqual(pruned["data"]["removed"]["runs"], ["orphaned"])
+            self.assertTrue((runs / "completed").exists())
+            self.assertTrue(live.exists())
+            self.assertTrue(stale.exists())
+            self.assertFalse((stale / ".reservation.json").exists())
+            self.assertTrue((stale / ".spoolctl.db").exists())
+            self.assertFalse(orphaned.exists())
+
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
