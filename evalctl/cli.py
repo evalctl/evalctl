@@ -67,6 +67,13 @@ class EvalctlError(Exception):
 
 
 def now_iso() -> str:
+    source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if source_date_epoch:
+        try:
+            ts = int(source_date_epoch)
+        except ValueError:
+            raise EvalctlError("E_CASE_INVALID", f"SOURCE_DATE_EPOCH must be an integer Unix timestamp (got {source_date_epoch})", "unset SOURCE_DATE_EPOCH or set it to seconds since epoch", 1)
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -701,6 +708,35 @@ def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str
     }
 
 
+TERMINAL_CASE_STATUSES = {"pass", "fail", "error", "canceled"}
+
+
+def write_terminal_marker(case_dir: Path, case_id: str, status: str) -> None:
+    write_json(case_dir / "state.json", {"id": case_id, "status": status, "completed_ts": now_iso()})
+
+
+def is_terminal_marker(path: Path) -> bool:
+    try:
+        marker = read_json(path)
+    except Exception:
+        return False
+    return marker.get("status") in TERMINAL_CASE_STATUSES
+
+
+def terminal_marker_count(run_dir: Path) -> int:
+    cases_dir = run_dir / "cases"
+    if not cases_dir.exists():
+        return 0
+    return sum(1 for marker in cases_dir.glob("*/state.json") if is_terminal_marker(marker))
+
+
+def case_entry_from_artifacts(run_dir: Path, case_id: str) -> dict[str, Any]:
+    case_dir = run_dir / "cases" / case_id
+    case = read_json(case_dir / "input.json")
+    score_doc = read_json(case_dir / "score.json")
+    return case_manifest_entry(case, score_doc["status"], score_doc["scores"])
+
+
 def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, exc: BaseException) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     warnings: list[dict[str, Any]] = []
     case_dir = run_dir / "cases" / case["id"]
@@ -737,6 +773,7 @@ def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str
     scores = score_case(case, "", runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=False, suite=suite)
     score_doc = {"case_id": case["id"], "status": "error", "ok": False, "scores": scores}
     write_json(case_dir / "score.json", score_doc)
+    write_terminal_marker(case_dir, case["id"], "error")
     return case_manifest_entry(case, "error", scores), warnings
 
 
@@ -848,6 +885,7 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
         status = "fail"
     score_doc = {"case_id": case["id"], "status": status, "ok": status == "pass", "scores": scores}
     write_json(case_dir / "score.json", score_doc)
+    write_terminal_marker(case_dir, case["id"], status)
     return case_manifest_entry(case, status, scores), warnings
 
 
@@ -1309,10 +1347,71 @@ def command_scorer_add(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=json_mode, human=f"{'Added' if data['created'] else 'Exists'} scorer {label}", started=started)
 
 
+def timeout_seconds_for_run(suite: dict[str, Any], timeout_override: int | None) -> int:
+    return int(timeout_override or suite["runner"].get("timeout_seconds", 300))
+
+
+def build_run_metadata(suite: dict[str, Any], suite_dir: Path, cases: list[dict[str, Any]], run_id: str,
+                       jobs: int, timeout_override: int | None, replayed_from: str | None,
+                       queue: dict[str, Any] | None = None, mode: str = "synchronous") -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "created_ts": now_iso(),
+        "suite_identity": run_identity(suite, suite_dir, cases),
+        "execution": {"mode": mode, "jobs": jobs, "timeout_seconds": timeout_seconds_for_run(suite, timeout_override)},
+        "replayed_from": replayed_from,
+        "queue": queue,
+    }
+
+
+def write_run_metadata_once(run_dir: Path, metadata: dict[str, Any]) -> None:
+    path = run_dir / "run.json"
+    if path.exists():
+        raise EvalctlError("E_RUN_BUSY", f"run metadata already exists for {metadata['run_id']}", "use evalctl run --resume to continue an incomplete run", 4)
+    write_json(path, metadata)
+
+
+def manifest_from_run_metadata(metadata: dict[str, Any], case_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    identity = metadata["suite_identity"]
+    manifest_doc: dict[str, Any] = {
+        "schema_version": 1,
+        "run_id": metadata["run_id"],
+        "suite": {"name": identity["suite_name"], "hash": identity["suite_hash"], "case_count": len(identity["cases"])},
+        "created_ts": metadata["created_ts"],
+        "execution": metadata["execution"],
+        "replayed_from": metadata.get("replayed_from"),
+        "cases": case_entries,
+    }
+    if metadata.get("queue") is not None:
+        manifest_doc["queue"] = metadata["queue"]
+    return manifest_doc
+
+
+def finalize_run(run_dir: Path, metadata: dict[str, Any], case_entries: list[dict[str, Any]]) -> tuple[dict[str, Any], bool]:
+    manifest_doc = manifest_from_run_metadata(metadata, case_entries)
+    write_json(run_dir / "manifest.json", manifest_doc)
+    report = report_data(run_dir)
+    (run_dir / "report.md").write_text(markdown_report(report))
+    run_ok = all(c["status"] == "pass" for c in case_entries)
+    data = {
+        "run_id": metadata["run_id"],
+        "run_dir": str(run_dir),
+        "run": {"ok": run_ok, "case_count": len(case_entries), "status_counts": status_counts(case_entries)},
+        "report_hash": report["report_hash"],
+    }
+    if metadata.get("replayed_from") is not None:
+        data["replayed_from"] = metadata["replayed_from"]
+        data["cases_replayed"] = len(case_entries)
+    return data, run_ok
+
+
 def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
                   jobs: int, timeout_override: int | None, replayed_from: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
+    metadata = build_run_metadata(suite, suite_dir, cases, run_id, jobs, timeout_override, replayed_from)
+    write_run_metadata_once(run_dir, metadata)
     all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
     case_results: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     sorted_cases = sorted(cases, key=lambda c: c["id"])
@@ -1326,7 +1425,7 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
                 try:
                     entry, warnings = synthesize_case_error(suite_dir, suite, case, run_dir, exc)
                 except Exception as synth_exc:
-                    if not (run_dir / "manifest.json").exists():
+                    if not (run_dir / "manifest.json").exists() and terminal_marker_count(run_dir) == 0:
                         shutil.rmtree(run_dir, ignore_errors=True)
                     raise EvalctlError("E_SCORER_FAILED", f"case {case['id']} failed before replayable artifacts could be written: {synth_exc}", "retry evalctl run with a fresh --run-id", 3)
             case_results[case["id"]] = (entry, warnings)
@@ -1337,23 +1436,7 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
         case_entries.append(entry)
     if any(c["status"] == "error" for c in case_entries):
         all_warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
-    run_ok = all(c["status"] == "pass" for c in case_entries)
-    manifest_doc = {
-        "schema_version": 1,
-        "run_id": run_id,
-        "suite": {"name": suite.get("name", suite_dir.name), "hash": sha256_text(stable_json(suite)), "case_count": len(cases)},
-        "created_ts": now_iso(),
-        "execution": {"mode": "synchronous", "jobs": jobs, "timeout_seconds": timeout_override or suite["runner"].get("timeout_seconds", 300)},
-        "replayed_from": replayed_from,
-        "cases": case_entries,
-    }
-    write_json(run_dir / "manifest.json", manifest_doc)
-    report = report_data(run_dir)
-    (run_dir / "report.md").write_text(markdown_report(report))
-    data = {"run_id": run_id, "run_dir": str(run_dir), "run": {"ok": run_ok, "case_count": len(cases), "status_counts": status_counts(case_entries)}, "report_hash": report["report_hash"]}
-    if replayed_from is not None:
-        data["replayed_from"] = replayed_from
-        data["cases_replayed"] = len(cases)
+    data, run_ok = finalize_run(run_dir, metadata, case_entries)
     return data, all_warnings, run_ok
 
 

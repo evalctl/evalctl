@@ -19,15 +19,17 @@ CMD = [sys.executable, "-m", "evalctl"]
 
 
 class EvalctlCliTests(unittest.TestCase):
-    def run_cli(self, args: list[str], cwd: Path, expect: int = 0) -> subprocess.CompletedProcess[str]:
+    def run_cli(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        if extra_env:
+            env.update(extra_env)
         result = subprocess.run(CMD + args, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, expect, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
         return result
 
-    def envelope(self, args: list[str], cwd: Path, expect: int = 0) -> dict:
-        result = self.run_cli(args, cwd, expect)
+    def envelope(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None) -> dict:
+        result = self.run_cli(args, cwd, expect, extra_env=extra_env)
         return json.loads(result.stdout)
 
     def run_cli_with_controlling_tty(self, args: list[str], cwd: Path, expect: int = 0) -> str:
@@ -154,6 +156,12 @@ class EvalctlCliTests(unittest.TestCase):
 
             copied = cwd / "copied-run"
             shutil.copytree(cwd / "evals" / "runs" / "r1", copied)
+            for sidecar in ["run.json", ".reservation.json", ".spoolctl.db"]:
+                sidecar_path = copied / sidecar
+                if sidecar_path.exists():
+                    sidecar_path.unlink()
+            for marker in copied.glob("cases/*/state.json"):
+                marker.unlink()
             score_files = sorted(copied.glob("cases/*/score.json"))
             self.assertGreater(len(score_files), 1)
             score_files[0].unlink()
@@ -162,6 +170,39 @@ class EvalctlCliTests(unittest.TestCase):
             shutil.rmtree(cwd / "evals")
             replay = self.envelope(["report", "--run-dir", str(copied), "--format", "json"], cwd)
             self.assertEqual(replay["data"]["report_hash"], original_hash)
+
+    def test_run_metadata_sidecar_and_source_date_epoch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            epoch_env = {"SOURCE_DATE_EPOCH": "1700000000"}
+            run = self.envelope(["run", "code-review", "--run-id", "stable", "--jobs", "1", "--timeout", "17", "--json"], cwd, extra_env=epoch_env)
+            run_dir = cwd / "evals" / "runs" / "stable"
+            run_json = json.loads((run_dir / "run.json").read_text())
+            manifest = json.loads((run_dir / "manifest.json").read_text())
+            self.assertEqual(run_json["created_ts"], "2023-11-14T22:13:20Z")
+            self.assertEqual(manifest["created_ts"], run_json["created_ts"])
+            self.assertEqual(manifest["execution"], run_json["execution"])
+            self.assertEqual(run_json["execution"], {"mode": "synchronous", "jobs": 1, "timeout_seconds": 17})
+            self.assertEqual(run_json["suite_identity"]["suite_name"], "code-review")
+            self.assertEqual(len(run_json["suite_identity"]["cases"]), 2)
+            self.assertEqual(sorted((c["id"], c["input_hash"]) for c in manifest["cases"]), [tuple(item) for item in run_json["suite_identity"]["cases"]])
+            self.assertEqual(run["data"]["report_hash"], "sha256:89f6dee9ee258d67c8d868bd4edbf7b0d90af0012cdab31b35ca030717bac88e")
+
+            report_before = self.envelope(["report", "stable", "--format", "json"], cwd)
+            (run_dir / "run.json").write_text(json.dumps({**run_json, "created_ts": "2099-01-01T00:00:00Z"}, indent=2, sort_keys=True) + "\n")
+            for state_path in run_dir.glob("cases/*/state.json"):
+                state = json.loads(state_path.read_text())
+                state["completed_ts"] = "2099-01-01T00:00:00Z"
+                state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+            report_after = self.envelope(["report", "stable", "--format", "json"], cwd)
+            self.assertEqual(report_after["data"]["report_hash"], report_before["data"]["report_hash"])
+
+            for case in manifest["cases"]:
+                marker = json.loads((run_dir / "cases" / case["id"] / "state.json").read_text())
+                self.assertEqual(marker["id"], case["id"])
+                self.assertEqual(marker["status"], case["status"])
+                self.assertIn(marker["status"], {"pass", "fail", "error"})
 
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
