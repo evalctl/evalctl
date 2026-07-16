@@ -10,10 +10,12 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -25,6 +27,7 @@ from . import __version__
 CONTRACT_VERSION = 1
 TOOL = "evalctl"
 DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
+DEFAULT_RESERVATION_TTL_SECONDS = 3600
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 BUILTIN_SCORERS = ("contains", "regex", "exact", "json-schema", "numeric-threshold", "file-exists", "exit-code", "workspace-diff")
 
@@ -42,12 +45,13 @@ CODE_REGISTRY = {
     "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
     "E_SCHEMA_VIOLATION": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
     "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False, "surface": "envelope"},
-    "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report"], "retryable": False, "surface": "envelope"},
+    "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report", "resume"], "retryable": False, "surface": "envelope"},
+    "E_RUN_CORRUPT": {"class": "user-input", "exit": 1, "where": ["resume"], "retryable": False, "surface": "envelope"},
     "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
     "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
-    "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run"], "retryable": True, "surface": "envelope"},
+    "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run", "resume"], "retryable": True, "surface": "envelope"},
     "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init", "replay", "suite", "case", "scorer"], "retryable": False, "surface": "envelope"},
     "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run", "replay"], "surface": "envelope"},
     "W_REPLAY_CASE_ABSENT": {"class": "warning", "where": ["replay"], "surface": "envelope"},
@@ -56,6 +60,8 @@ CODE_REGISTRY = {
     "W_OUTPUT_TRUNCATED": {"class": "warning", "where": ["run"], "surface": "envelope"},
     "W_PATH_UNREADABLE": {"class": "warning", "where": ["run"], "surface": "envelope"},
     "W_PARTIAL_RUN": {"class": "warning", "where": ["run", "report"], "surface": "envelope"},
+    "W_RESERVATION_RECLAIMED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
+    "W_RESUME_NOTHING_PENDING": {"class": "warning", "where": ["resume"], "surface": "envelope"},
 }
 
 
@@ -645,6 +651,19 @@ def parse_jobs(argv: list[str]) -> int:
     return jobs
 
 
+def parse_positive_int_flag(argv: list[str], flag: str, default: int) -> int:
+    raw = value_after(argv, flag)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise EvalctlError("E_CASE_INVALID", f"{flag} must be a positive integer (got {raw})", f"provide {flag} as a positive integer", 1)
+    if value < 1:
+        raise EvalctlError("E_CASE_INVALID", f"{flag} must be at least 1 (got {value})", f"provide {flag} as a positive integer", 1)
+    return value
+
+
 def render_runner_arg(arg: str, env: dict[str, str]) -> str:
     for key, value in env.items():
         arg = arg.replace(f"${key}", value)
@@ -735,6 +754,110 @@ def case_entry_from_artifacts(run_dir: Path, case_id: str) -> dict[str, Any]:
     case = read_json(case_dir / "input.json")
     score_doc = read_json(case_dir / "score.json")
     return case_manifest_entry(case, score_doc["status"], score_doc["scores"])
+
+
+def reservation_path(run_dir: Path) -> Path:
+    return run_dir / ".reservation.json"
+
+
+def parse_iso_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def read_reservation(run_dir: Path) -> dict[str, Any] | None:
+    path = reservation_path(run_dir)
+    if not path.exists():
+        return None
+    try:
+        data = read_json(path)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def reservation_is_live(record: dict[str, Any], *, now: datetime | None = None) -> bool:
+    try:
+        ttl_seconds = int(record["ttl_seconds"])
+        heartbeat_ts = parse_iso_timestamp(str(record["heartbeat_ts"]))
+    except Exception:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - heartbeat_ts).total_seconds() < ttl_seconds
+
+
+def write_reservation(run_dir: Path, run_id: str, ttl_seconds: int) -> None:
+    write_json(reservation_path(run_dir), {
+        "run_id": run_id,
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "started_ts": now_iso(),
+        "heartbeat_ts": now_iso(),
+        "ttl_seconds": ttl_seconds,
+    })
+
+
+def clear_reservation(run_dir: Path) -> None:
+    try:
+        reservation_path(run_dir).unlink()
+    except FileNotFoundError:
+        pass
+
+
+class ReservationHeartbeat:
+    def __init__(self, run_dir: Path, run_id: str, ttl_seconds: int) -> None:
+        self.run_dir = run_dir
+        self.run_id = run_id
+        self.ttl_seconds = ttl_seconds
+        self.stop = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def __enter__(self) -> "ReservationHeartbeat":
+        write_reservation(self.run_dir, self.run_id, self.ttl_seconds)
+        interval = max(0.1, min(5.0, self.ttl_seconds / 4))
+        self.thread = threading.Thread(target=self._run, args=(interval,), daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.stop.set()
+        if self.thread:
+            self.thread.join(timeout=1)
+
+    def _run(self, interval: float) -> None:
+        while not self.stop.wait(interval):
+            try:
+                record = read_reservation(self.run_dir) or {}
+                record.update({
+                    "run_id": self.run_id,
+                    "pid": os.getpid(),
+                    "host": socket.gethostname(),
+                    "heartbeat_ts": now_iso(),
+                    "ttl_seconds": self.ttl_seconds,
+                })
+                record.setdefault("started_ts", now_iso())
+                write_json(reservation_path(self.run_dir), record)
+            except Exception:
+                pass
+
+
+def split_completed_and_pending(run_dir: Path, cases: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    completed: dict[str, dict[str, Any]] = {}
+    pending: list[dict[str, Any]] = []
+    for case in sorted(cases, key=lambda c: c["id"]):
+        marker_path = run_dir / "cases" / case["id"] / "state.json"
+        if is_terminal_marker(marker_path):
+            try:
+                completed[case["id"]] = case_entry_from_artifacts(run_dir, case["id"])
+                continue
+            except Exception:
+                pass
+        pending.append(case)
+    return completed, pending
+
+
+def clean_pending_case_dirs(run_dir: Path, pending_cases: list[dict[str, Any]]) -> None:
+    for case in pending_cases:
+        shutil.rmtree(run_dir / "cases" / case["id"], ignore_errors=True)
 
 
 def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, exc: BaseException) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1388,6 +1511,30 @@ def manifest_from_run_metadata(metadata: dict[str, Any], case_entries: list[dict
     return manifest_doc
 
 
+def read_run_metadata(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "run.json"
+    if not path.exists():
+        raise EvalctlError("E_RUN_NOT_FOUND", f"run metadata not found: {path}", "resume requires a run created with durable metadata", 1)
+    try:
+        metadata = json.loads(path.read_text())
+        if not isinstance(metadata, dict):
+            raise ValueError("run.json must be an object")
+        for key in ("schema_version", "run_id", "created_ts", "suite_identity", "execution"):
+            if key not in metadata:
+                raise ValueError(f"run.json missing {key}")
+        identity = metadata["suite_identity"]
+        if not isinstance(identity, dict) or not isinstance(identity.get("cases"), list):
+            raise ValueError("run.json suite_identity is malformed")
+        execution = metadata["execution"]
+        if not isinstance(execution, dict) or not {"mode", "jobs", "timeout_seconds"} <= set(execution):
+            raise ValueError("run.json execution is malformed")
+        return metadata
+    except EvalctlError:
+        raise
+    except Exception as exc:
+        raise EvalctlError("E_RUN_CORRUPT", f"run metadata is corrupt for {run_dir}: {exc}", "inspect or remove run.json, then retry with a valid run", 1)
+
+
 def finalize_run(run_dir: Path, metadata: dict[str, Any], case_entries: list[dict[str, Any]]) -> tuple[dict[str, Any], bool]:
     manifest_doc = manifest_from_run_metadata(metadata, case_entries)
     write_json(run_dir / "manifest.json", manifest_doc)
@@ -1406,17 +1553,14 @@ def finalize_run(run_dir: Path, metadata: dict[str, Any], case_entries: list[dic
     return data, run_ok
 
 
-def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
-                  jobs: int, timeout_override: int | None, replayed_from: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
-    run_dir.mkdir(parents=True)
-    shutil.copytree(suite_dir, run_dir / "suite-snapshot")
-    metadata = build_run_metadata(suite, suite_dir, cases, run_id, jobs, timeout_override, replayed_from)
-    write_run_metadata_once(run_dir, metadata)
-    all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
+def execute_pending_cases(suite_dir: Path, suite: dict[str, Any], all_cases: list[dict[str, Any]], pending_cases: list[dict[str, Any]],
+                          completed_entries: dict[str, dict[str, Any]], run_dir: Path, jobs: int,
+                          timeout_override: int | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    all_warnings: list[dict[str, Any]] = []
     case_results: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
-    sorted_cases = sorted(cases, key=lambda c: c["id"])
+    clean_pending_case_dirs(run_dir, pending_cases)
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
-        future_to_case = {executor.submit(run_case, suite_dir, suite, case, run_dir, timeout_override): case for case in sorted_cases}
+        future_to_case = {executor.submit(run_case, suite_dir, suite, case, run_dir, timeout_override): case for case in sorted(pending_cases, key=lambda c: c["id"])}
         for future in concurrent.futures.as_completed(future_to_case):
             case = future_to_case[future]
             try:
@@ -1430,18 +1574,40 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
                     raise EvalctlError("E_SCORER_FAILED", f"case {case['id']} failed before replayable artifacts could be written: {synth_exc}", "retry evalctl run with a fresh --run-id", 3)
             case_results[case["id"]] = (entry, warnings)
     case_entries = []
-    for case in sorted_cases:
-        entry, warnings = case_results[case["id"]]
-        all_warnings.extend(warnings)
+    for case in sorted(all_cases, key=lambda c: c["id"]):
+        if case["id"] in completed_entries:
+            entry = completed_entries[case["id"]]
+            warnings: list[dict[str, Any]] = []
+        else:
+            entry, warnings = case_results[case["id"]]
+            all_warnings.extend(warnings)
         case_entries.append(entry)
-    if any(c["status"] == "error" for c in case_entries):
-        all_warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
-    data, run_ok = finalize_run(run_dir, metadata, case_entries)
+    return case_entries, all_warnings
+
+
+def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
+                  jobs: int, timeout_override: int | None, replayed_from: str | None,
+                  reservation_ttl: int = DEFAULT_RESERVATION_TTL_SECONDS) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+    run_dir.mkdir(parents=True)
+    shutil.copytree(suite_dir, run_dir / "suite-snapshot")
+    metadata = build_run_metadata(suite, suite_dir, cases, run_id, jobs, timeout_override, replayed_from)
+    write_run_metadata_once(run_dir, metadata)
+    all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
+    with ReservationHeartbeat(run_dir, run_id, reservation_ttl):
+        case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, jobs, timeout_override)
+        all_warnings.extend(run_warnings)
+        if any(c["status"] == "error" for c in case_entries):
+            all_warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
+        data, run_ok = finalize_run(run_dir, metadata, case_entries)
+        clear_reservation(run_dir)
     return data, all_warnings, run_ok
 
 
 def command_run(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id"}, {"--json", "--no-color", "--fail-on-fail"})
+    resume_id = value_after(argv, "--resume")
+    if resume_id is not None:
+        return command_run_resume(argv, resume_id, json_mode, started)
+    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id", "--reservation-ttl"}, {"--json", "--no-color", "--fail-on-fail"})
     if len(args) < 2:
         raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
     suite_dir = resolve_suite(args[1])
@@ -1449,6 +1615,7 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     suite = read_json(suite_dir / "suite.json")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
     jobs = parse_jobs(argv)
+    reservation_ttl = parse_positive_int_flag(argv, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS)
     unsandboxed_warning = {"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}
     if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
         print(unsandboxed_warning["message"], file=sys.stderr)
@@ -1466,11 +1633,60 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
             run_summary = {"ok": data["run"]["ok"], "case_count": data["run"]["case_count"], "status_counts": data["run"]["status_counts"]}
             existing = {"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": run_summary, "report_hash": data["report_hash"]}
             return print_envelope(existing, json_mode=json_mode, warnings=[unsandboxed_warning], started=started)
-        raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
+        reservation = read_reservation(run_dir)
+        if reservation and reservation_is_live(reservation):
+            raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
+        raise EvalctlError("E_RUN_BUSY", f"run {run_id} is incomplete and may be resumable", f"retry with: evalctl run --resume {run_id} --json", 4)
     timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
-    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None)
+    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
+    return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
+
+
+def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: float) -> int:
+    if not is_safe_id(run_id) or "/" in run_id or "\\" in run_id:
+        raise EvalctlError("E_CASE_INVALID", f"invalid run id: {run_id}", "use a simple run id with letters, numbers, dot, underscore, or dash", 1)
+    run_dir = Path("evals") / "runs" / run_id
+    if not run_dir.exists():
+        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_id}", "resume an existing incomplete run id", 1)
+    nothing_pending_warning = {"code": "W_RESUME_NOTHING_PENDING", "message": "run has no pending cases to resume"}
+    if (run_dir / "manifest.json").exists():
+        data = report_data(run_dir)
+        run_summary = {"ok": data["run"]["ok"], "case_count": data["run"]["case_count"], "status_counts": data["run"]["status_counts"]}
+        existing = {"run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": run_summary, "report_hash": data["report_hash"]}
+        return print_envelope(existing, json_mode=json_mode, warnings=[nothing_pending_warning], started=started)
+    suite_dir = run_dir / "suite-snapshot"
+    if not suite_dir.exists():
+        raise EvalctlError("E_RUN_NOT_FOUND", f"suite snapshot not found for {run_id}", "resume requires the original suite-snapshot directory", 1)
+    metadata = read_run_metadata(run_dir)
+    suite = read_json(suite_dir / "suite.json")
+    cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+    if stable_json(metadata["suite_identity"]) != stable_json(run_identity(suite, suite_dir, cases)):
+        raise EvalctlError("E_RUN_CONFLICT", f"run metadata does not match the suite snapshot for {run_id}", "inspect run.json and suite-snapshot before retrying", 5)
+    reservation = read_reservation(run_dir)
+    warnings: list[dict[str, Any]] = []
+    if reservation and reservation_is_live(reservation):
+        raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait for the run to finish or retry after its reservation TTL", 4)
+    if reservation is not None:
+        warnings.append({"code": "W_RESERVATION_RECLAIMED", "message": "reclaimed stale run reservation"})
+    completed_entries, pending_cases = split_completed_and_pending(run_dir, cases)
+    reservation_ttl = parse_positive_int_flag(argv, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS)
+    jobs = int(metadata["execution"]["jobs"])
+    timeout_override = int(metadata["execution"]["timeout_seconds"])
+    with ReservationHeartbeat(run_dir, run_id, reservation_ttl):
+        if pending_cases:
+            case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, jobs, timeout_override)
+            warnings.extend(run_warnings)
+        else:
+            case_entries = [completed_entries[case["id"]] for case in sorted(cases, key=lambda c: c["id"])]
+            warnings.append(nothing_pending_warning)
+        if any(c["status"] == "error" for c in case_entries):
+            warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
+        data, run_ok = finalize_run(run_dir, metadata, case_entries)
+        clear_reservation(run_dir)
+    commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
+    print_envelope(data, json_mode=json_mode, human=f"Resume {run_id}: {'pass' if run_ok else 'fail'}", warnings=warnings, commands=commands, started=started)
     return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
 
 

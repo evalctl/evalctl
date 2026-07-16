@@ -84,13 +84,34 @@ class EvalctlCliTests(unittest.TestCase):
             "Path('review.md').write_text('bounds check fixed\\n')\n"
         )
 
+    def write_resume_runner(self, cwd: Path) -> None:
+        runner = (
+            "import json, os, time\n"
+            "from pathlib import Path\n"
+            "case = json.loads(Path(os.environ['EVALCTL_CASE_FILE']).read_text())\n"
+            "if case['id'] == os.environ.get('SLEEP_CASE'):\n"
+            "    time.sleep(30)\n"
+            "log = os.environ.get('RUN_LOG')\n"
+            "if log:\n"
+            "    with open(log, 'a') as f:\n"
+            "        f.write(case['id'] + '\\n')\n"
+            "text = 'bounds check\\n' if case['id'] == 'cr-fail' else 'null dereference src/app.py:7\\n'\n"
+            "Path(os.environ['EVALCTL_OUTPUT_FILE']).write_text(text)\n"
+            "Path('review.md').write_text(text)\n"
+        )
+        suite = self.load_suite(cwd)
+        suite["runner"]["env_allowlist"] = sorted(set(suite["runner"].get("env_allowlist", [])) | {"RUN_LOG", "SLEEP_CASE"})
+        self.write_suite(cwd, suite)
+        for case_id in ("cr-fail", "cr-pass"):
+            (self.suite_path(cwd) / "fixtures" / case_id / "runner.py").write_text(runner)
+
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:9b0c191821183aae2791b2c861c1cfb3e9247eb2d44035058dffc55815b904c4")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:8c9c7b83dc91e7cec32280d591f95d3463691a33299901ad7328962191619a71")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": True})
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
@@ -203,6 +224,68 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertEqual(marker["id"], case["id"])
                 self.assertEqual(marker["status"], case["status"])
                 self.assertIn(marker["status"], {"pass", "fail", "error"})
+
+    def test_resume_reuses_terminal_cases_and_cleans_partial_case(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.write_resume_runner(cwd)
+            log_path = cwd / "runner.log"
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env.update({"SOURCE_DATE_EPOCH": "1700000000", "RUN_LOG": str(log_path), "SLEEP_CASE": "cr-pass"})
+            proc = subprocess.Popen(
+                CMD + ["run", "code-review", "--run-id", "resume-me", "--jobs", "1", "--reservation-ttl", "1", "--json"],
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            first_marker = cwd / "evals" / "runs" / "resume-me" / "cases" / "cr-fail" / "state.json"
+            deadline = time.time() + 10
+            while time.time() < deadline and not first_marker.exists():
+                time.sleep(0.05)
+            self.assertTrue(first_marker.exists(), "first case never reached terminal marker")
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=5)
+            partial_case_dir = cwd / "evals" / "runs" / "resume-me" / "cases" / "cr-pass"
+            partial_case_dir.mkdir(parents=True, exist_ok=True)
+            (partial_case_dir / "partial-sentinel.txt").write_text("must be removed before resume\n")
+            time.sleep(1.2)
+
+            resume = self.envelope(["run", "--resume", "resume-me", "--reservation-ttl", "1", "--json"], cwd, extra_env={"SOURCE_DATE_EPOCH": "1800000000", "RUN_LOG": str(log_path)})
+            self.assertTrue(resume["data"]["run"]["ok"])
+            self.assertIn("W_RESERVATION_RECLAIMED", {w["code"] for w in resume["warnings"]})
+            self.assertFalse((partial_case_dir / "partial-sentinel.txt").exists())
+            self.assertEqual(log_path.read_text().splitlines(), ["cr-fail", "cr-pass"])
+            manifest = json.loads((cwd / "evals" / "runs" / "resume-me" / "manifest.json").read_text())
+            self.assertEqual(manifest["created_ts"], "2023-11-14T22:13:20Z")
+            self.assertEqual(manifest["execution"]["jobs"], 1)
+            self.assertEqual([case["id"] for case in manifest["cases"]], ["cr-fail", "cr-pass"])
+
+    def test_resume_completed_and_corrupt_run_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "done", "--json"], cwd)
+            manifest_path = cwd / "evals" / "runs" / "done" / "manifest.json"
+            before = manifest_path.read_text()
+            resumed = self.envelope(["run", "--resume", "done", "--json"], cwd)
+            self.assertTrue(resumed["data"]["existing"])
+            self.assertIn("W_RESUME_NOTHING_PENDING", {w["code"] for w in resumed["warnings"]})
+            self.assertEqual(manifest_path.read_text(), before)
+
+            corrupt = cwd / "evals" / "runs" / "corrupt"
+            shutil.copytree(cwd / "evals" / "runs" / "done", corrupt)
+            (corrupt / "manifest.json").unlink()
+            (corrupt / "run.json").write_text("not json\n")
+            bad = self.run_cli(["run", "--resume", "corrupt", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(bad.stdout)["errors"][0]["code"], "E_RUN_CORRUPT")
 
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
