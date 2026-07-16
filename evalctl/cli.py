@@ -180,7 +180,7 @@ COMMANDS:
   robot-docs guide                 Agent workflow handbook
   init [--force]                   Scaffold evals/ with code-review suite
   validate [suite] [--json]        Validate suite files
-  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--fail-on-fail] [--json]
+  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
   jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
   suite add <name> [--runner-argv ARGV|--runner-command CMD --shell] [--json]
@@ -204,13 +204,19 @@ AGENT/AUTOMATION:
 
 
 def capabilities_data() -> dict[str, Any]:
+    try:
+        spool = probe_spoolctl()
+        spoolctl_status = {"available": True, "planned": False, "minimum_version": "0.4.1", "version": spool.get("version") or spool.get("tool_version")}
+    except EvalctlError:
+        spoolctl_status = {"available": False, "planned": False, "minimum_version": "0.4.1"}
     verbs = {
         "capabilities": {"description": "Return the machine contract.", "json": True, "mutates": False, "flags": ["--json"], "exit_codes": [0]},
         "schema": {"description": "Return output schemas.", "json": True, "mutates": False, "args": ["verb"], "flags": ["--json"], "exit_codes": [0, 1]},
         "robot-docs": {"description": "Return agent workflow guide.", "json": False, "mutates": False, "args": ["guide"], "exit_codes": [0, 1]},
         "init": {"description": "Scaffold evals/ tree with sample code-review suite.", "json": True, "mutates": True, "flags": ["--json", "--force"], "exit_codes": [0, 5]},
         "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
-        "run": {"description": "Run a suite synchronously and produce a portable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
+        "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
+        "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force"], "exit_codes": [0, 1]},
         "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
         "suite": {"description": "Author suites, including suite add.", "json": True, "mutates": True, "args": ["add", "name"], "flags": ["--json", "--runner-argv", "--runner-command", "--shell"], "exit_codes": [0, 1, 5]},
         "case": {"description": "Author cases, including case add.", "json": True, "mutates": True, "args": ["add", "suite"], "flags": ["--json", "--task", "--workspace", "--id", "--diff", "--expect-json"], "exit_codes": [0, 1, 5]},
@@ -221,7 +227,7 @@ def capabilities_data() -> dict[str, Any]:
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
@@ -232,10 +238,10 @@ def capabilities_data() -> dict[str, Any]:
             "EVALCTL_OUTPUT_FILE": "runner response destination",
             "EVALCTL_TASK_FILE": "task text file",
             "EVALCTL_DIFF_FILE": "review diff file when present",
-            "SOURCE_DATE_EPOCH": "used for deterministic timestamps where applicable",
+            "SOURCE_DATE_EPOCH": "controls deterministic timestamps, including run created_ts",
         },
         "integrations": {
-            "spoolctl": {"available": False, "planned": True},
+            "spoolctl": spoolctl_status,
             "inferctl": {"available": False, "planned": True},
         },
         "schemas_uri": "evalctl schema <verb> --json",
@@ -291,7 +297,24 @@ DATA_SCHEMAS = {
     ),
     "run": schema_object(
         ["run_id", "run_dir", "run", "report_hash"],
-        {"run_id": {"type": "string"}, "run_dir": {"type": "string"}, "run": RUN_SUMMARY_SCHEMA, "report_hash": {"type": "string"}, "existing": {"type": "boolean"}},
+        {"run_id": {"type": "string"}, "run_dir": {"type": "string"}, "run": RUN_SUMMARY_SCHEMA, "report_hash": {"type": "string"}, "existing": {"type": "boolean"}, "queue": {"type": "object"}},
+    ),
+    "jobs": schema_object(
+        [],
+        {
+            "runs": {"type": "array", "items": {"type": "object"}},
+            "count": {"type": "integer", "minimum": 0},
+            "run_id": {"type": "string"},
+            "run_dir": {"type": "string"},
+            "state": {"type": "string"},
+            "reservation": {"type": "object"},
+            "cases": {"type": "object"},
+            "queue_jobs": {"type": "array", "items": {"type": "object"}},
+            "confirmed": {"type": "boolean"},
+            "candidates": {"type": "object"},
+            "removed": {"type": "object"},
+            "refused": {"type": "array", "items": {"type": "object"}},
+        },
     ),
     "replay": schema_object(
         ["replayed_from", "cases_replayed"],
@@ -390,7 +413,7 @@ Inspect: `evalctl status <run-id> --json`
 Report: `evalctl report <run-id> --format json`
 Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 
-## v0.2 workflow
+## v0.3 workflow
 
 1. Scaffold `evals/suites/code-review/` with `evalctl init`.
 2. Or author a new suite without hand-editing JSON:
@@ -399,10 +422,22 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
    `evalctl scorer add demo --name exact --required --json`.
 3. Run `evalctl validate <suite> --json` before executing local code.
 4. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
-5. Use `status` for run state and recommended next command.
-6. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
-7. Copy a run directory anywhere and run `report --run-dir <path> --format json`; evalctl recomputes scores from artifacts and does not invoke the runner.
-8. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
+5. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
+   `run.json`, terminal `cases/<id>/state.json` markers, and the original suite snapshot;
+   it skips terminal cases and re-runs only unfinished cases.
+6. Use `jobs list|get|prune --json` to inspect completed, running, stale, and orphaned
+   local run state. Reservations are TTL files with a background heartbeat; no daemon or
+   lock server is required.
+7. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
+   execution to spoolctl. Spoolctl is optional and must be >= 0.4.1; absent or incompatible
+   spoolctl is a hard error only when `--queue spoolctl` is requested. The queue DB is
+   per-run `.spoolctl.db`, so externally managed cross-machine workers require a shared
+   filesystem and are not a general hosted-worker mode.
+8. Use `status` for run state and recommended next command.
+9. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
+10. Copy a completed run directory anywhere and run `report --run-dir <path> --format json`;
+   evalctl recomputes scores from report artifacts and does not require durability sidecars.
+11. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
    to re-execute only failed/errored cases into a fresh partial run. `replay --run-id`
    names the destination run, not the source.
 
@@ -431,6 +466,14 @@ A runner timeout, runner spawn failure, or command-scorer failure is reportable
 case data: `run`/`replay` exits 0 by default, exits 6 with `--fail-on-fail`, emits
 `W_PARTIAL_RUN`, and does not put the per-case reason code in `errors[]`.
 
+## Durable runs
+
+Fresh runs write `run.json` once before execution and terminal
+`cases/<case_id>/state.json` markers after each case's report artifacts are complete.
+`manifest.json` is finalized from that durable state. `SOURCE_DATE_EPOCH` controls
+`created_ts`, which makes manifest parity tests deterministic. Durability sidecars are
+operational state and are not part of `report_hash`.
+
 ## Artifact writes
 
 JSON artifacts are written by creating a temporary file in the target directory
@@ -440,8 +483,8 @@ guarantee; v0.1.1 does not fsync files or directories.
 
 ## Deferred
 
-Async queueing, crash resume, compare, inferctl route capture, and LLM-as-judge
-scoring are roadmap items, not v0.2 commands.
+Compare, inferctl route capture, externally managed shared worker fleets, and
+LLM-as-judge scoring are roadmap items, not v0.3 commands.
 """
 
 

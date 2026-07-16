@@ -7,12 +7,11 @@ durable artifacts. It scores what agents actually do — files written, diffs
 produced, commands run — on your own machine, with no gateway, dashboard, or
 SaaS account.
 
-v0.2 runs synchronously in-process, writes self-contained run directories, adds
-CLI authoring verbs, supports targeted execution replay, and includes an
-external command-scorer protocol.
-The contract leaves room for future [spoolctl](https://github.com/Ozhiaki/spoolctl)
-and [inferctl](https://inferctl.dev) integrations, but neither is required or
-implemented in v0.2.
+v0.3 writes durable run metadata, supports crash resume, adds local run-state
+inspection, and can optionally delegate runner execution to
+[spoolctl](https://github.com/Ozhiaki/spoolctl). The standalone synchronous path
+remains complete and requires no external service. [inferctl](https://inferctl.dev)
+route capture remains deferred.
 
 ## About
 
@@ -35,15 +34,17 @@ evalctl is agent-shaped.
 | --- | --- | --- |
 | Unit under test | prompt → completion | agent run → files, diffs, command logs, artifacts |
 | Scoring surface | text of a response | resulting workspace: git diff, expected/forbidden file changes, exit codes, plus text |
-| Execution | in-process, synchronous | v0.2 synchronous; `replay --failed` reruns failed cases; spoolctl async is deferred |
+| Execution | in-process, synchronous | v0.3 synchronous by default; `run --resume` resumes crashed runs; optional `--queue spoolctl` delegates runner execution |
 | Model context | provider API keys | [inferctl](https://inferctl.dev) route/preflight provenance is deferred |
 
 ## Status
 
-Python pre-release. v0.2 provides scaffold, validate, bounded parallel run
-execution, status, report, deterministic local scorers, CLI authoring verbs,
-execution replay for failed cases, command scorers, truthful warnings/errors,
-real schema output, and artifact replay from a copied run directory.
+Python pre-release. v0.3 provides scaffold, validate, bounded parallel run
+execution, durable run metadata, crash resume, local jobs inspection, optional
+spoolctl queueing, status, report, deterministic local scorers, CLI authoring
+verbs, execution replay for failed cases, command scorers, truthful
+warnings/errors, real schema output, and artifact replay from a copied run
+directory.
 `contract_version` remains `1`.
 
 ## Commands
@@ -54,9 +55,44 @@ evalctl suite add demo --runner-argv "python3 $EVALCTL_WORKSPACE/r.py" --json
 evalctl case add demo --task "do X" --workspace fixtures/x --expect-json '{"exact":"ok"}' --json
 evalctl scorer add demo --name exact --required --json
 evalctl run demo --json
+evalctl run --resume <run-id> --json
+evalctl jobs list --json
+evalctl run demo --queue spoolctl --slots 4 --json
 evalctl replay --failed <run-id> --json
 evalctl report <run-id> --format json
 ```
+
+## Durable Runs
+
+Every run writes `run.json` before executing cases and writes
+`cases/<case_id>/state.json` only after the case artifacts needed for reports are
+complete. `manifest.json` is finalized from that durable state. If a process is
+killed mid-run, `evalctl run --resume <run-id> --json` reuses the original
+suite snapshot and run parameters, skips terminal cases, deletes partial
+unfinished case directories, and executes only the remainder.
+
+Reservations are liveness-only `.reservation.json` files with a TTL and
+background heartbeat. A live reservation returns `E_RUN_BUSY`; a stale
+reservation is reclaimed by explicit `--resume`. `jobs list|get|prune` inspects
+completed, running, stale, and orphaned local run state and safely prunes only
+with explicit confirmation.
+
+Durability sidecars are operational state. Reports and artifact replay do not
+require `run.json`, `.reservation.json`, `.spoolctl.db`, `state.json`, or
+`job.json`; `report_hash` stays based on the report projection. `SOURCE_DATE_EPOCH`
+controls `created_ts` for deterministic manifest parity.
+
+## Optional Spoolctl Queue
+
+`evalctl run <suite> --queue spoolctl --json` delegates only runner execution to
+spoolctl (`>= 0.4.1`). Evalctl still prepares workspaces, normalizes stdout and
+stderr, captures workspace diffs, scores cases, and writes terminal markers. If
+spoolctl is absent or incompatible, queued runs fail explicitly; non-queued runs
+do not need spoolctl.
+
+The queue database is per-run at `.spoolctl.db`; v0.3 starts one ephemeral
+`spoolctl work --drain` worker per queued run. General externally managed worker
+fleets are not part of this release.
 
 ## Authoring
 

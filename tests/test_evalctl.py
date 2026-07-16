@@ -186,32 +186,45 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:f815770277c6989328fde85bd7fc4d4331a38bcf4a735d12727e472d3e61ea6a")
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": True})
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:78011856f61ca74d09af043eae8371067a21a244d521db0aa69a0d805a880427")
+            self.assertEqual(caps["tool_version"], "0.3.0")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
+            self.assertIn("durable_runs", caps["data"]["features"])
+            self.assertIn("queue_spoolctl", caps["data"]["features"])
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
+            self.assertEqual(caps["data"]["error_codes"]["E_SPOOLCTL_UNAVAILABLE"]["exit"], 3)
+            self.assertEqual(caps["data"]["error_codes"]["E_JOB_TRANSIENT"]["exit"], 4)
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_FAILED"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_SCORER_CASE_FAILED"]["surface"], "score_json")
             self.assertIn("replay", caps["data"]["error_codes"]["E_SCORER_CASE_FAILED"]["where"])
             self.assertIn("replay", caps["data"]["error_codes"]["W_UNSANDBOXED_RUNNER"]["where"])
-            for verb in ("run", "replay", "suite", "case", "scorer"):
+            self.assertIn("--resume", caps["data"]["verbs"]["run"]["flags"])
+            self.assertIn("--queue", caps["data"]["verbs"]["run"]["flags"])
+            self.assertIn("--slots", caps["data"]["verbs"]["run"]["flags"])
+            self.assertIn("--reservation-ttl", caps["data"]["verbs"]["run"]["flags"])
+            for verb in ("run", "jobs", "replay", "suite", "case", "scorer"):
                 self.assertIn(verb, caps["data"]["verbs"])
             schema = self.envelope(["schema", "run", "--json"], cwd)
             self.assertTrue(schema["ok"])
-            self.assertEqual(schema["meta"]["data_hash"], "sha256:668cfa4ab24174f7e3187f7e011be060f50e3197d92564a53b807d151bc7e5d6")
+            self.assertEqual(schema["meta"]["data_hash"], "sha256:90d9bb2f67c88bbd3338c3a21f4a5723ee0d6e3b46b19b35f74d98dde31ce2c6")
             self.assertIn("run", schema["data"]["schemas"])
             run_schema = schema["data"]["schemas"]["run"]
             self.assertIn("properties", run_schema)
             self.assertIn("required", run_schema)
             self.assertTrue(run_schema["additionalProperties"])
+            self.assertIn("queue", run_schema["properties"])
+            jobs_schema = self.envelope(["schema", "jobs", "--json"], cwd)
+            self.assertEqual(jobs_schema["meta"]["data_hash"], "sha256:c7581967ee5e14c44b6e5f59f108145f29aac7b09dfdb76678717f41a4c298e1")
+            self.assertIn("queue_jobs", jobs_schema["data"]["schemas"]["jobs"]["properties"])
 
             all_schemas = self.envelope(["schema", "--json"], cwd)
-            for verb in ("capabilities", "schema", "init", "validate", "run", "replay", "suite", "case", "scorer", "status", "report"):
+            for verb in ("capabilities", "schema", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"):
                 verb_schema = all_schemas["data"]["schemas"][verb]
                 self.assertIn("properties", verb_schema)
                 self.assertIn("required", verb_schema)
                 self.assertTrue(verb_schema["additionalProperties"])
-            for verb in ("replay", "suite", "case", "scorer"):
+            for verb in ("jobs", "replay", "suite", "case", "scorer"):
                 single_schema = self.envelope(["schema", verb, "--json"], cwd)
                 self.assertIn(verb, single_schema["data"]["schemas"])
                 self.assertTrue(single_schema["data"]["schemas"][verb]["additionalProperties"])
@@ -220,6 +233,16 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn('surface:"runner_json"', docs.stdout)
             self.assertIn('surface:"score_json"', docs.stdout)
             self.assertIn("does not put the per-case reason code in `errors[]`", docs.stdout)
+            self.assertIn("run --resume", docs.stdout)
+            self.assertIn("--queue spoolctl", docs.stdout)
+
+    def test_capabilities_live_spoolctl_probe_can_flip_available(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd)
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertTrue(caps["data"]["integrations"]["spoolctl"]["available"])
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.1")
 
     def test_init_validate_run_status_report_and_artifact_replay(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -342,6 +365,16 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(manifest["created_ts"], "2023-11-14T22:13:20Z")
             self.assertEqual(manifest["execution"]["jobs"], 1)
             self.assertEqual([case["id"] for case in manifest["cases"]], ["cr-fail", "cr-pass"])
+
+            control = cwd / "control"
+            control.mkdir()
+            self.envelope(["init", "--json"], control)
+            self.write_resume_runner(control)
+            self.envelope(["run", "code-review", "--run-id", "resume-me", "--jobs", "1", "--reservation-ttl", "1", "--json"], control, extra_env={"SOURCE_DATE_EPOCH": "1700000000", "RUN_LOG": str(control / "runner.log")})
+            self.assertEqual(
+                (cwd / "evals" / "runs" / "resume-me" / "manifest.json").read_text(),
+                (control / "evals" / "runs" / "resume-me" / "manifest.json").read_text(),
+            )
 
     def test_resume_completed_and_corrupt_run_guards(self) -> None:
         with tempfile.TemporaryDirectory() as td:

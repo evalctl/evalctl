@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 - 2026-07-16
+
+Durability and resume minor release. `contract_version` remains `1`; the
+plain synchronous report hash stays byte-identical to v0.2 and manifest-shape
+parity is preserved with `created_ts` controlled by `SOURCE_DATE_EPOCH`.
+Capabilities and schema hashes were re-pinned for additive flags, schemas, and
+error-code registry entries.
+
+- Added durable `run.json` metadata and per-case terminal `state.json` markers
+  so interrupted runs can be reconstructed.
+- Added TTL-based `.reservation.json` liveness with background heartbeat and
+  stale-reservation reclaim through `run --resume`.
+- Added `run --resume <run-id>` to skip terminal cases, re-run unfinished cases,
+  and finalize the original run id from snapshotted state.
+- Added `jobs list|get|prune` for local run/reservation/queue inspection and
+  guarded cleanup.
+- Refactored case execution into prepare, execute, normalize, score, and marker
+  phases.
+- Added optional `run --queue spoolctl` for `spoolctl >= 0.4.1`, using one
+  ephemeral drain worker, per-run `.spoolctl.db`, at-most-once execution by
+  default, and evalctl-owned artifact reconstruction/scoring.
+- Updated README, robot docs, schemas, capabilities, help text, and regression
+  tests for the v0.3 surfaces.
+
 ## 0.2.0 - 2026-07-15
 
 Authoring and execution-replay minor release. `contract_version` remains `1`;
