@@ -901,7 +901,8 @@ def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str
     return case_manifest_entry(case, "error", scores), warnings
 
 
-def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, timeout_override: int | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def prepare_case_workspace(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path,
+                           timeout_override: int | None) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
     case_dir = run_dir / "cases" / case["id"]
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -934,6 +935,32 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
     env_values = [os.environ.get(k, "") for k in runner.get("redact_env_values", [])]
     patterns = runner.get("redact_patterns", [])
     cwd = Path(render_runner_arg(runner.get("cwd") or str(workspace), eval_env))
+    return {
+        "suite": suite,
+        "case": case,
+        "case_dir": case_dir,
+        "workspace": workspace,
+        "output_file": output_file,
+        "task_txt": task_txt,
+        "diff_file": diff_file,
+        "diff_src": diff_src,
+        "before": before,
+        "runner": runner,
+        "timeout": timeout,
+        "max_bytes": max_bytes,
+        "env": env,
+        "eval_env": eval_env,
+        "env_values": env_values,
+        "patterns": patterns,
+        "cwd": cwd,
+        "warnings": warnings,
+    }
+
+
+def execute_runner_in_process(prepared: dict[str, Any]) -> dict[str, Any]:
+    runner = prepared["runner"]
+    case = prepared["case"]
+    eval_env = prepared["eval_env"]
     started = time.time()
     timed_out = False
     spawn_failed = False
@@ -941,29 +968,33 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
     signal_value: int | None = None
     stdout = ""
     stderr = ""
+    proc: subprocess.Popen[str] | None = None
     try:
         stdin = subprocess.PIPE if runner.get("stdin") == "task" else None
         input_text = case["task"] if runner.get("stdin") == "task" else None
         if runner.get("shell", False):
             cmd: str | list[str] = render_runner_arg(runner["command"], eval_env)
-            proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, text=True, stdin=stdin,
+            proc = subprocess.Popen(cmd, shell=True, cwd=prepared["cwd"], env=prepared["env"], text=True, stdin=stdin,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         else:
             argv = [render_runner_arg(str(a), eval_env) for a in runner["argv"]]
-            proc = subprocess.Popen(argv, shell=False, cwd=cwd, env=env, text=True, stdin=stdin,
+            proc = subprocess.Popen(argv, shell=False, cwd=prepared["cwd"], env=prepared["env"], text=True, stdin=stdin,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
+        stdout, stderr = proc.communicate(input=input_text, timeout=prepared["timeout"])
         exit_code = proc.returncode
         if proc.returncode < 0:
             signal_value = -proc.returncode
     except subprocess.TimeoutExpired as exc:
         timed_out = True
         exit_code = None
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        drained_stdout, drained_stderr = proc.communicate()
+        if proc is not None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            drained_stdout, drained_stderr = proc.communicate()
+        else:
+            drained_stdout, drained_stderr = "", ""
         stdout = decode_subprocess_output(exc.stdout) + decode_subprocess_output(drained_stdout)
         stderr = decode_subprocess_output(exc.stderr) + decode_subprocess_output(drained_stderr)
     except OSError as exc:
@@ -971,12 +1002,30 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
         exit_code = None
         stderr = str(exc)
     duration_ms = int((time.time() - started) * 1000)
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": timed_out,
+        "spawn_failed": spawn_failed,
+        "exit_code": exit_code,
+        "signal": signal_value,
+        "duration_ms": duration_ms,
+    }
+
+
+def normalize_runner_artifacts(prepared: dict[str, Any], runner_result: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    case_dir = prepared["case_dir"]
+    output_file = prepared["output_file"]
+    max_bytes = prepared["max_bytes"]
+    stdout = runner_result["stdout"]
+    stderr = runner_result["stderr"]
     trunc_stdout = len(stdout.encode()) > max_bytes
     trunc_stderr = len(stderr.encode()) > max_bytes
     stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
     stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
-    stdout, red_stdout = apply_redaction(stdout, patterns, env_values)
-    stderr, red_stderr = apply_redaction(stderr, patterns, env_values)
+    stdout, red_stdout = apply_redaction(stdout, prepared["patterns"], prepared["env_values"])
+    stderr, red_stderr = apply_redaction(stderr, prepared["patterns"], prepared["env_values"])
     output_truncated = False
     if output_file.exists():
         output_bytes = output_file.read_bytes()
@@ -984,33 +1033,52 @@ def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_d
         output_text = output_bytes[:max_bytes].decode("utf-8", "replace")
     else:
         output_text = stdout
-    output_text, red_output = apply_redaction(output_text, patterns, env_values)
+    output_text, red_output = apply_redaction(output_text, prepared["patterns"], prepared["env_values"])
     output_file.write_text(output_text)
     (case_dir / "runner.stdout.txt").write_text(stdout)
     (case_dir / "runner.stderr.txt").write_text(stderr)
-    error_code = "E_RUNNER_TIMEOUT" if timed_out else "E_RUNNER_FAILED" if spawn_failed else None
-    runner_json = {"exit_code": exit_code, "signal": signal_value, "timed_out": timed_out, "spawn_failed": spawn_failed, "error_code": error_code, "duration_ms": duration_ms,
+    error_code = "E_RUNNER_TIMEOUT" if runner_result["timed_out"] else "E_RUNNER_FAILED" if runner_result["spawn_failed"] else None
+    runner_json = {"exit_code": runner_result["exit_code"], "signal": runner_result["signal"], "timed_out": runner_result["timed_out"], "spawn_failed": runner_result["spawn_failed"], "error_code": error_code, "duration_ms": runner_result["duration_ms"],
                    "stdout_truncated": trunc_stdout, "stderr_truncated": trunc_stderr, "output_truncated": output_truncated,
                    "stdout_redacted": red_stdout, "stderr_redacted": red_stderr, "output_redacted": red_output}
     if trunc_stdout or trunc_stderr or output_truncated:
         warnings.append({"code": "W_OUTPUT_TRUNCATED", "message": "runner output exceeded max_output_bytes"})
     write_json(case_dir / "runner.json", runner_json)
-    after, mw = manifest(workspace)
+    return output_text, runner_json, warnings
+
+
+def capture_workspace_after_and_score(prepared: dict[str, Any], output_text: str, runner_json: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    warnings: list[dict[str, Any]] = []
+    case = prepared["case"]
+    suite = prepared["suite"]
+    case_dir = prepared["case_dir"]
+    after, mw = manifest(prepared["workspace"])
     warnings.extend(mw)
-    diff = diff_manifests(before, after)
+    diff = diff_manifests(prepared["before"], after)
     write_json(case_dir / "workspace-after.json", after)
     write_json(case_dir / "workspace-diff.json", diff)
     (case_dir / "workspace.diff").write_text(render_text_diff(diff))
-    status = "error" if timed_out or spawn_failed else "pass"
-    scores = score_case(case, output_text, runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=True, suite=suite, eval_env=eval_env)
+    status = "error" if runner_json["timed_out"] or runner_json["spawn_failed"] else "pass"
+    scores = score_case(case, output_text, runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=True, suite=suite, eval_env=prepared["eval_env"])
     if any(s.get("error") for s in scores):
         status = "error"
     elif status != "error" and not all(s["ok"] for s in scores if s.get("required", True)):
         status = "fail"
     score_doc = {"case_id": case["id"], "status": status, "ok": status == "pass", "scores": scores}
     write_json(case_dir / "score.json", score_doc)
-    write_terminal_marker(case_dir, case["id"], status)
     return case_manifest_entry(case, status, scores), warnings
+
+
+def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, timeout_override: int | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    prepared = prepare_case_workspace(suite_dir, suite, case, run_dir, timeout_override)
+    all_warnings = list(prepared["warnings"])
+    runner_result = execute_runner_in_process(prepared)
+    output_text, runner_json, warnings = normalize_runner_artifacts(prepared, runner_result)
+    all_warnings.extend(warnings)
+    entry, warnings = capture_workspace_after_and_score(prepared, output_text, runner_json)
+    all_warnings.extend(warnings)
+    write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
+    return entry, all_warnings
 
 
 def render_text_diff(diff: dict[str, Any]) -> str:

@@ -353,6 +353,30 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue((stale / ".spoolctl.db").exists())
             self.assertFalse(orphaned.exists())
 
+    def test_case_execution_phase_helpers_are_callable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            suite_dir = self.suite_path(cwd)
+            suite = self.load_suite(cwd)
+            case = self.load_cases(cwd)[0]
+            run_dir = cwd / "evals" / "runs" / "phases"
+            run_dir.mkdir(parents=True)
+
+            prepared = cli.prepare_case_workspace(suite_dir, suite, case, run_dir, None)
+            self.assertTrue((prepared["case_dir"] / "workspace-before.json").exists())
+            runner_result = cli.execute_runner_in_process(prepared)
+            output_text, runner_json, normalize_warnings = cli.normalize_runner_artifacts(prepared, runner_result)
+            self.assertEqual(normalize_warnings, [])
+            self.assertEqual(runner_json["exit_code"], 0)
+            entry, score_warnings = cli.capture_workspace_after_and_score(prepared, output_text, runner_json)
+            self.assertEqual(score_warnings, [])
+            self.assertIn(entry["status"], {"pass", "fail"})
+            self.assertTrue((prepared["case_dir"] / "score.json").exists())
+            self.assertFalse((prepared["case_dir"] / "state.json").exists())
+            cli.write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
+            self.assertTrue((prepared["case_dir"] / "state.json").exists())
+
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
