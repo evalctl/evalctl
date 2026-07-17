@@ -105,17 +105,38 @@ class EvalctlCliTests(unittest.TestCase):
         for case_id in ("cr-fail", "cr-pass"):
             (self.suite_path(cwd) / "fixtures" / case_id / "runner.py").write_text(runner)
 
-    def install_fake_spoolctl(self, cwd: Path, *, version: str = "0.4.1") -> Path:
+    def install_fake_spoolctl(self, cwd: Path, *, version: str = "0.4.2", capabilities_shape: str = "real",
+                              capability_flags: object | None = None, include_version: bool = True,
+                              data_version: str | None = None) -> Path:
         bindir = cwd / "bin"
         bindir.mkdir()
         script = bindir / "spoolctl"
+        if capability_flags is None:
+            if capabilities_shape == "compact":
+                capability_flags = ["--cwd", "--env", "--max-crashes"]
+            else:
+                capability_flags = [
+                    {"flag": "--cwd", "type": "str", "default": None},
+                    {"flag": "--env", "type": "str", "default": []},
+                    {"flag": "--max-crashes", "type": "int", "default": None},
+                ]
         script.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, subprocess, sys, time\n"
             "from pathlib import Path\n"
             f"VERSION = {version!r}\n"
+            f"CAPABILITIES_SHAPE = {capabilities_shape!r}\n"
+            f"CAPABILITY_FLAGS = {capability_flags!r}\n"
+            f"INCLUDE_VERSION = {include_version!r}\n"
+            f"DATA_VERSION = {data_version!r}\n"
             "def emit(data, code=0):\n"
             "    print(json.dumps({'ok': True, 'data': data}, sort_keys=True))\n"
+            "    raise SystemExit(code)\n"
+            "def emit_envelope(data, code=0, tool_version=VERSION):\n"
+            "    env = {'ok': True, 'data': data}\n"
+            "    if INCLUDE_VERSION and tool_version is not None:\n"
+            "        env['tool_version'] = tool_version\n"
+            "    print(json.dumps(env, sort_keys=True))\n"
             "    raise SystemExit(code)\n"
             "def load(db):\n"
             "    p = Path(db)\n"
@@ -125,7 +146,20 @@ class EvalctlCliTests(unittest.TestCase):
             "    p = Path(db); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(data, sort_keys=True))\n"
             "args = sys.argv[1:]\n"
             "if args[:2] == ['capabilities', '--json']:\n"
-            "    emit({'version': VERSION, 'contract_version': '1', 'verbs': {'add': {'flags': ['--cwd', '--env', '--max-crashes']}}})\n"
+            "    if CAPABILITIES_SHAPE == 'bad-json':\n"
+            "        print('{not json'); raise SystemExit(0)\n"
+            "    if CAPABILITIES_SHAPE == 'error-envelope':\n"
+            "        print(json.dumps({'ok': False, 'errors': [{'code': 'BROKEN'}]}, sort_keys=True)); raise SystemExit(0)\n"
+            "    if CAPABILITIES_SHAPE == 'exit4':\n"
+            "        print(json.dumps({'ok': False, 'errors': [{'code': 'TRANSIENT'}]}, sort_keys=True)); raise SystemExit(4)\n"
+            "    data = {'contract_version': '1', 'verbs': {'add': {'flags': CAPABILITY_FLAGS}}}\n"
+            "    if INCLUDE_VERSION and (CAPABILITIES_SHAPE in ('compact', 'raw') or DATA_VERSION is not None):\n"
+            "        data['version'] = DATA_VERSION or VERSION\n"
+            "    if CAPABILITIES_SHAPE == 'raw':\n"
+            "        print(json.dumps(data, sort_keys=True)); raise SystemExit(0)\n"
+            "    if CAPABILITIES_SHAPE == 'compact':\n"
+            "        emit(data)\n"
+            "    emit_envelope(data)\n"
             "cmd = args[0] if args else ''\n"
             "if os.environ.get('FAKE_SPOOLCTL_TRANSIENT') and cmd == 'wait':\n"
             "    print(json.dumps({'ok': False, 'errors': [{'code': 'TRANSIENT'}]})); raise SystemExit(4)\n"
@@ -242,7 +276,92 @@ class EvalctlCliTests(unittest.TestCase):
             bindir = self.install_fake_spoolctl(cwd)
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertTrue(caps["data"]["integrations"]["spoolctl"]["available"])
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+
+    def test_spoolctl_flag_names_accepts_real_and_compact_shapes(self) -> None:
+        self.assertEqual(cli.spoolctl_flag_names(["--cwd", "--env", "--max-crashes"]), {"--cwd", "--env", "--max-crashes"})
+        self.assertEqual(
+            cli.spoolctl_flag_names([{"flag": "--cwd"}, {"flag": "--env"}, {"flag": "--max-crashes"}]),
+            {"--cwd", "--env", "--max-crashes"},
+        )
+        self.assertEqual(cli.spoolctl_flag_names([{"name": "--cwd"}, 7, None, "--env"]), {"--env"})
+        self.assertEqual(cli.spoolctl_flag_names({"flag": "--cwd"}), set())
+
+    def test_spoolctl_probe_accepts_real_compact_and_raw_capabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd, capabilities_shape="real")
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd, version="0.4.1", capabilities_shape="compact")
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.1")
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="raw")
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+
+    def test_spoolctl_probe_envelope_version_is_authoritative(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="real", data_version="9.9.9")
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+
+    def test_spoolctl_probe_capabilities_degrades_on_incompatible_shapes(self) -> None:
+        cases = [
+            {"version": "0.4.0"},
+            {"capability_flags": [{"flag": "--cwd"}, {"flag": "--env"}]},
+            {"capability_flags": {"flag": "--cwd"}},
+            {"include_version": False},
+            {"capabilities_shape": "bad-json"},
+            {"capabilities_shape": "error-envelope"},
+            {"capabilities_shape": "exit4"},
+        ]
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                with tempfile.TemporaryDirectory() as td:
+                    cwd = Path(td)
+                    bindir = self.install_fake_spoolctl(cwd, **kwargs)
+                    caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+                    self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
+
+    def test_spoolctl_probe_run_queue_hard_errors_on_incompatible_shapes(self) -> None:
+        cases = [
+            ({"version": "0.4.0"}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"capability_flags": [{"flag": "--cwd"}, {"flag": "--env"}]}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"capability_flags": {"flag": "--cwd"}}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"include_version": False}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"capabilities_shape": "bad-json"}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"capabilities_shape": "error-envelope"}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"capabilities_shape": "exit4"}, 4, "E_JOB_TRANSIENT"),
+        ]
+        for kwargs, expect, code in cases:
+            with self.subTest(kwargs=kwargs):
+                with tempfile.TemporaryDirectory() as td:
+                    cwd = Path(td)
+                    self.envelope(["init", "--json"], cwd)
+                    bindir = self.install_fake_spoolctl(cwd, **kwargs)
+                    result = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=expect, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+                    self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], code)
+
+    def test_spoolctl_probe_version_prefix_policy_is_pinned(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd, version="0.4", capabilities_shape="real")
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_spoolctl(cwd, version="0.4.2-rc1", capabilities_shape="real")
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2-rc1")
 
     def test_init_validate_run_status_report_and_artifact_replay(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -509,7 +628,7 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
             bindir = self.install_fake_spoolctl(cwd, version="0.4.0")
-            incompatible = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=3, extra_env={"PATH": str(bindir)})
+            incompatible = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=3, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(json.loads(incompatible.stdout)["errors"][0]["code"], "E_SPOOLCTL_INCOMPATIBLE")
 
     def test_queue_spoolctl_outcome_mapping_and_stdin_wrapper(self) -> None:
