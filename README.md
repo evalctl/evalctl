@@ -129,4 +129,4 @@ local code and are covered by the same unsandboxed-runner warning as runners.
 ## Home
 
 - Site: [evalctl.dev](https://evalctl.dev)
-- Org: [github.com/evalctl](https://github.com/evalctl)
+- Repository: [github.com/evalctl/evalctl](https://github.com/evalctl/evalctl)

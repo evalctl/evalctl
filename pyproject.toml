@@ -18,6 +18,12 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 
+[project.urls]
+Homepage = "https://evalctl.dev"
+Repository = "https://github.com/evalctl/evalctl"
+Issues = "https://github.com/evalctl/evalctl/issues"
+Changelog = "https://github.com/evalctl/evalctl/blob/main/CHANGELOG.md"
+
 [project.scripts]
 evalctl = "evalctl.cli:main"
 
