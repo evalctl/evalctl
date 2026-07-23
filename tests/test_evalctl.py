@@ -381,12 +381,15 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:9cd3509376ad9ef13fd3a2da1fcf45b9fc0a7a763467c6a370368d0668c5867f")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:49eb3c3e64bd888a9ae9b8b9588bb1fc6af77e9689b043b3daa9c8acee1a0c4c")
             self.assertEqual(caps["tool_version"], "0.3.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
+            self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_COMMAND"]["exit"], 1)
+            self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_SUBCOMMAND"]["surface"], "envelope")
+            self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_FLAG"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_SPOOLCTL_UNAVAILABLE"]["exit"], 3)
             self.assertEqual(caps["data"]["error_codes"]["E_JOB_TRANSIENT"]["exit"], 4)
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
@@ -428,8 +431,12 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn('surface:"runner_json"', docs.stdout)
             self.assertIn('surface:"score_json"', docs.stdout)
             self.assertIn("does not put the per-case reason code in `errors[]`", docs.stdout)
+            self.assertIn("did_you_mean", docs.stdout)
             self.assertIn("run --resume", docs.stdout)
             self.assertIn("--queue spoolctl", docs.stdout)
+
+    def test_static_verb_registry_matches_capabilities(self) -> None:
+        self.assertEqual(cli.VERB_NAMES, set(cli.capabilities_data()["verbs"]))
 
     def test_capabilities_live_spoolctl_probe_can_flip_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -828,7 +835,7 @@ class EvalctlCliTests(unittest.TestCase):
             bad_get = self.run_cli(["jobs", "get", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(bad_get.stdout)["errors"][0]["code"], "E_CASE_INVALID")
             bad_subcommand = self.run_cli(["jobs", "wat", "--json"], cwd, expect=1)
-            self.assertEqual(json.loads(bad_subcommand.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            self.assertEqual(json.loads(bad_subcommand.stdout)["errors"][0]["code"], "E_UNKNOWN_SUBCOMMAND")
 
             dry = self.envelope(["jobs", "prune", "--json"], cwd)
             self.assertFalse(dry["data"]["confirmed"])
@@ -1029,6 +1036,60 @@ class EvalctlCliTests(unittest.TestCase):
             bad_jobs = self.run_cli(["run", "code-review", "--jobs", "0", "--json"], cwd, expect=1)
             bad_jobs_payload = json.loads(bad_jobs.stdout)
             self.assertEqual(bad_jobs_payload["errors"][0]["code"], "E_CASE_INVALID")
+
+    def test_did_you_mean_for_unknown_commands_subcommands_and_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            top = self.run_cli(["stauts", "--json"], cwd, expect=1)
+            top_error = json.loads(top.stdout)["errors"][0]
+            self.assertEqual(top_error["code"], "E_UNKNOWN_COMMAND")
+            self.assertEqual(top_error["did_you_mean"], "status")
+            self.assertEqual(top_error["corrected_command"], "evalctl status --json")
+            self.assertIn("Did you mean: evalctl status --json", top.stderr)
+
+            no_match = self.run_cli(["zzzzzz", "--json"], cwd, expect=1)
+            no_match_error = json.loads(no_match.stdout)["errors"][0]
+            self.assertEqual(no_match_error["code"], "E_UNKNOWN_COMMAND")
+            self.assertNotIn("did_you_mean", no_match_error)
+            self.assertIn("capabilities", no_match_error["hint"])
+
+            jobs = self.run_cli(["jobs", "lsit", "--json"], cwd, expect=1)
+            jobs_error = json.loads(jobs.stdout)["errors"][0]
+            self.assertEqual(jobs_error["code"], "E_UNKNOWN_SUBCOMMAND")
+            self.assertEqual(jobs_error["did_you_mean"], "list")
+            self.assertEqual(jobs_error["corrected_command"], "evalctl jobs list --json")
+            self.assertEqual(jobs_error["valid_values"], ["get", "list", "prune"])
+
+            for args, corrected in (
+                (["suite", "aad", "--json"], "evalctl suite add --json"),
+                (["case", "aad", "--json"], "evalctl case add --json"),
+                (["scorer", "addd", "--json"], "evalctl scorer add --json"),
+                (["robot-docs", "guid", "--json"], "evalctl robot-docs guide --json"),
+            ):
+                with self.subTest(args=args):
+                    result = self.run_cli(args, cwd, expect=1)
+                    error = json.loads(result.stdout)["errors"][0]
+                    self.assertEqual(error["code"], "E_UNKNOWN_SUBCOMMAND")
+                    self.assertEqual(error["corrected_command"], corrected)
+
+            run_flag = self.run_cli(["run", "code-review", "--run-idd", "oops", "--json"], cwd, expect=1)
+            run_error = json.loads(run_flag.stdout)["errors"][0]
+            self.assertEqual(run_error["code"], "E_UNKNOWN_FLAG")
+            self.assertEqual(run_error["did_you_mean"], "--run-id")
+            self.assertEqual(run_error["corrected_command"], "evalctl run code-review --run-id oops --json")
+
+            replay_flag = self.run_cli(["replay", "--failed", "source", "--run-idd", "dest", "--json"], cwd, expect=1)
+            replay_error = json.loads(replay_flag.stdout)["errors"][0]
+            self.assertEqual(replay_error["code"], "E_UNKNOWN_FLAG")
+            self.assertEqual(replay_error["did_you_mean"], "--run-id")
+
+            jobs_flag = self.run_cli(["jobs", "list", "--jsno"], cwd, expect=1)
+            jobs_flag_error = json.loads(jobs_flag.stdout)["errors"][0]
+            self.assertEqual(jobs_flag_error["code"], "E_UNKNOWN_FLAG")
+            self.assertEqual(jobs_flag_error["did_you_mean"], "--json")
+
+            good = self.run_cli(["jobs", "list", "--json"], cwd)
+            self.assertEqual(json.loads(good.stdout)["errors"], [])
 
     def test_run_id_reuse_detects_semantic_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as td:

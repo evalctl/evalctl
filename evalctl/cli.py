@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import difflib
 import fnmatch
 import hashlib
 import json
@@ -45,6 +46,9 @@ EXIT_CODES = {
 
 CODE_REGISTRY = {
     "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
+    "E_UNKNOWN_COMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
+    "E_UNKNOWN_SUBCOMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
+    "E_UNKNOWN_FLAG": {"class": "user-input", "exit": 1, "where": ["run", "replay", "jobs"], "retryable": False, "surface": "envelope"},
     "E_SCHEMA_VIOLATION": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
     "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False, "surface": "envelope"},
     "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report", "resume"], "retryable": False, "surface": "envelope"},
@@ -68,6 +72,21 @@ CODE_REGISTRY = {
     "W_RESERVATION_RECLAIMED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
     "W_RESUME_NOTHING_PENDING": {"class": "warning", "where": ["resume"], "surface": "envelope"},
 }
+
+VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"})
+SUBCOMMANDS = {
+    "jobs": frozenset({"list", "get", "prune"}),
+    "suite": frozenset({"add"}),
+    "case": frozenset({"add"}),
+    "scorer": frozenset({"add"}),
+    "robot-docs": frozenset({"guide"}),
+}
+RUN_FLAGS_WITH_VALUES = {"--jobs", "--timeout", "--run-id", "--reservation-ttl", "--queue", "--slots"}
+RUN_BOOL_FLAGS = {"--json", "--no-color", "--fail-on-fail"}
+REPLAY_FLAGS_WITH_VALUES = {"--run-dir", "--run-id", "--suite", "--jobs", "--timeout"}
+REPLAY_BOOL_FLAGS = {"--json", "--no-color", "--failed", "--force", "--fail-on-fail"}
+JOBS_FLAGS_WITH_VALUES = {"--limit", "--cursor"}
+JOBS_BOOL_FLAGS = {"--json", "--no-color", "--yes", "--force"}
 
 
 class EvalctlError(Exception):
@@ -157,6 +176,52 @@ def strip_flags(argv: list[str], flags_with_values: set[str], bool_flags: set[st
     return out
 
 
+def nearest(value: str, choices: set[str] | frozenset[str]) -> str | None:
+    matches = difflib.get_close_matches(value, sorted(choices), n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def command_string(parts: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in [TOOL, *parts])
+
+
+def unknown_command_error(cmd: str, argv: list[str]) -> EvalctlError:
+    suggestion = nearest(cmd, VERB_NAMES)
+    ctx: dict[str, Any] = {"valid_values": sorted(VERB_NAMES)}
+    if suggestion:
+        ctx["did_you_mean"] = suggestion
+        ctx["corrected_command"] = command_string([suggestion, *argv[1:]])
+    return EvalctlError("E_UNKNOWN_COMMAND", f"unknown command '{cmd}'", "try: evalctl capabilities --json", 1, **ctx)
+
+
+def unknown_subcommand_error(namespace: str, subcommand: str | None, argv: list[str]) -> EvalctlError:
+    valid = SUBCOMMANDS[namespace]
+    bad = subcommand or ""
+    suggestion = nearest(bad, valid) if bad else None
+    ctx: dict[str, Any] = {"valid_values": sorted(valid)}
+    if suggestion:
+        ctx["did_you_mean"] = suggestion
+        remainder = argv[2:] if len(argv) > 2 else []
+        ctx["corrected_command"] = command_string([namespace, suggestion, *remainder])
+    return EvalctlError("E_UNKNOWN_SUBCOMMAND", f"unknown {namespace} subcommand '{bad}'", f"valid {namespace} subcommands: {', '.join(sorted(valid))}", 1, **ctx)
+
+
+def unknown_flag_error(flag: str, argv: list[str], valid_flags: set[str]) -> EvalctlError:
+    suggestion = nearest(flag, valid_flags)
+    ctx: dict[str, Any] = {"valid_values": sorted(valid_flags)}
+    if suggestion:
+        ctx["did_you_mean"] = suggestion
+        corrected = [suggestion if item == flag else item for item in argv]
+        ctx["corrected_command"] = command_string(corrected)
+    return EvalctlError("E_UNKNOWN_FLAG", f"unknown flag '{flag}'", "check the command's supported flags", 1, **ctx)
+
+
+def reject_unknown_flags(argv: list[str], stripped_args: list[str], valid_flags: set[str]) -> None:
+    for token in stripped_args[1:]:
+        if token.startswith("--"):
+            raise unknown_flag_error(token, argv, valid_flags)
+
+
 def print_envelope(data: Any, *, json_mode: bool, human: str | None = None, warnings: list[dict[str, Any]] | None = None,
                    commands: list[dict[str, Any]] | None = None, started: float | None = None,
                    meta_extra: dict[str, Any] | None = None) -> int:
@@ -169,6 +234,10 @@ def print_envelope(data: Any, *, json_mode: bool, human: str | None = None, warn
 
 def print_error(err: EvalctlError, *, json_mode: bool, started: float | None = None) -> int:
     print(err.error["message"], file=sys.stderr)
+    if err.error.get("corrected_command"):
+        print(f"Did you mean: {err.error['corrected_command']}", file=sys.stderr)
+    elif err.error.get("did_you_mean"):
+        print(f"Did you mean: {err.error['did_you_mean']}", file=sys.stderr)
     if json_mode:
         print(stable_json(envelope(None, ok=False, errors=[err.error], started=started)))
     return err.exit_code
@@ -474,6 +543,10 @@ appear as per-case scorer verdict reason codes, for example
 A runner timeout, runner spawn failure, or command-scorer failure is reportable
 case data: `run`/`replay` exits 0 by default, exits 6 with `--fail-on-fail`, emits
 `W_PARTIAL_RUN`, and does not put the per-case reason code in `errors[]`.
+Unknown command, subcommand, and checked flag typos use `E_UNKNOWN_COMMAND`,
+`E_UNKNOWN_SUBCOMMAND`, or `E_UNKNOWN_FLAG`; JSON errors include
+`did_you_mean`, `corrected_command`, and `valid_values` when evalctl can safely
+construct a correction.
 
 ## Durable runs
 
@@ -1942,8 +2015,11 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
 def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     resume_id = value_after(argv, "--resume")
     if resume_id is not None:
+        args = strip_flags(argv, RUN_FLAGS_WITH_VALUES | {"--resume"}, RUN_BOOL_FLAGS)
+        reject_unknown_flags(argv, args, RUN_FLAGS_WITH_VALUES | RUN_BOOL_FLAGS | {"--resume"})
         return command_run_resume(argv, resume_id, json_mode, started)
-    args = strip_flags(argv, {"--jobs", "--timeout", "--run-id", "--reservation-ttl", "--queue", "--slots"}, {"--json", "--no-color", "--fail-on-fail"})
+    args = strip_flags(argv, RUN_FLAGS_WITH_VALUES, RUN_BOOL_FLAGS)
+    reject_unknown_flags(argv, args, RUN_FLAGS_WITH_VALUES | RUN_BOOL_FLAGS | {"--resume"})
     if len(args) < 2:
         raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
     queue_backend = value_after(argv, "--queue")
@@ -2105,7 +2181,8 @@ def classify_run_dir(run_dir: Path) -> dict[str, Any]:
 
 
 def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, {"--limit", "--cursor"}, {"--json", "--no-color", "--yes", "--force"})
+    args = strip_flags(argv, JOBS_FLAGS_WITH_VALUES, JOBS_BOOL_FLAGS)
+    reject_unknown_flags(argv, args, JOBS_FLAGS_WITH_VALUES | JOBS_BOOL_FLAGS)
     if len(args) < 2:
         raise EvalctlError("E_CASE_INVALID", "jobs requires list, get, or prune", "try: evalctl jobs list --json", 1)
     subcommand = args[1]
@@ -2165,14 +2242,15 @@ def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
             "refused": [{"run_id": item["run_id"], "state": item["state"]} for item in refused],
         }
         return print_envelope(data, json_mode=json_mode, human=json.dumps(data, indent=2, sort_keys=True), started=started)
-    raise EvalctlError("E_CASE_INVALID", f"unknown jobs subcommand '{subcommand}'", "try: evalctl jobs list --json", 1)
+    raise unknown_subcommand_error("jobs", subcommand, argv)
 
 
 def parse_replay_source(argv: list[str]) -> Path:
+    args = strip_flags(argv, REPLAY_FLAGS_WITH_VALUES, REPLAY_BOOL_FLAGS)
+    reject_unknown_flags(argv, args, REPLAY_FLAGS_WITH_VALUES | REPLAY_BOOL_FLAGS)
     if not has_flag(argv, "--failed"):
         raise EvalctlError("E_CASE_INVALID", "replay requires --failed in v0.2", "try: evalctl replay --failed <run-id> --json", 1)
     run_dir = value_after(argv, "--run-dir")
-    args = strip_flags(argv, {"--run-dir", "--run-id", "--suite", "--jobs", "--timeout"}, {"--json", "--no-color", "--failed", "--force", "--fail-on-fail"})
     positional = args[1:] if args and args[0] == "replay" else args
     if run_dir and positional:
         raise EvalctlError("E_CASE_INVALID", "replay source must be either a run id or --run-dir, not both", "try: evalctl replay --failed <run-id> --json", 1)
@@ -2362,19 +2440,27 @@ def main(argv: list[str] | None = None) -> int:
         if cmd == "schema":
             args = strip_flags(argv, set(), {"--json", "--no-color"})
             return print_envelope(schema_data(args[1] if len(args) > 1 else None), json_mode=True, started=started)
-        if cmd == "robot-docs" and len(argv) > 1 and argv[1] == "guide":
-            print(robot_docs(), end="")
-            return 0
+        if cmd == "robot-docs":
+            if len(argv) > 1 and argv[1] == "guide":
+                print(robot_docs(), end="")
+                return 0
+            raise unknown_subcommand_error("robot-docs", argv[1] if len(argv) > 1 else None, argv)
         if cmd == "init":
             return command_init(argv, json_mode, started)
         if cmd == "validate":
             return command_validate(argv, json_mode, started)
-        if cmd == "suite" and len(argv) > 1 and argv[1] == "add":
-            return command_suite_add(argv, json_mode, started)
-        if cmd == "case" and len(argv) > 1 and argv[1] == "add":
-            return command_case_add(argv, json_mode, started)
-        if cmd == "scorer" and len(argv) > 1 and argv[1] == "add":
-            return command_scorer_add(argv, json_mode, started)
+        if cmd == "suite":
+            if len(argv) > 1 and argv[1] == "add":
+                return command_suite_add(argv, json_mode, started)
+            raise unknown_subcommand_error("suite", argv[1] if len(argv) > 1 else None, argv)
+        if cmd == "case":
+            if len(argv) > 1 and argv[1] == "add":
+                return command_case_add(argv, json_mode, started)
+            raise unknown_subcommand_error("case", argv[1] if len(argv) > 1 else None, argv)
+        if cmd == "scorer":
+            if len(argv) > 1 and argv[1] == "add":
+                return command_scorer_add(argv, json_mode, started)
+            raise unknown_subcommand_error("scorer", argv[1] if len(argv) > 1 else None, argv)
         if cmd == "run":
             return command_run(argv, json_mode, started)
         if cmd == "jobs":
@@ -2385,7 +2471,7 @@ def main(argv: list[str] | None = None) -> int:
             return command_status(argv, json_mode, started)
         if cmd == "report":
             return command_report(argv, json_mode, started)
-        raise EvalctlError("E_CASE_INVALID", f"unknown command '{cmd}'", "try: evalctl capabilities --json", 1)
+        raise unknown_command_error(cmd, argv)
     except EvalctlError as exc:
         return print_error(exc, json_mode=json_mode, started=started)
     except KeyboardInterrupt:
