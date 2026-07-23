@@ -381,7 +381,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:78011856f61ca74d09af043eae8371067a21a244d521db0aa69a0d805a880427")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:9cd3509376ad9ef13fd3a2da1fcf45b9fc0a7a763467c6a370368d0668c5867f")
             self.assertEqual(caps["tool_version"], "0.3.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -410,7 +410,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(run_schema["additionalProperties"])
             self.assertIn("queue", run_schema["properties"])
             jobs_schema = self.envelope(["schema", "jobs", "--json"], cwd)
-            self.assertEqual(jobs_schema["meta"]["data_hash"], "sha256:c7581967ee5e14c44b6e5f59f108145f29aac7b09dfdb76678717f41a4c298e1")
+            self.assertEqual(jobs_schema["meta"]["data_hash"], "sha256:6c51619952aeecaf2915158c570de05659356ac517a020ef34d8492299a62935")
             self.assertIn("queue_jobs", jobs_schema["data"]["schemas"]["jobs"]["properties"])
 
             all_schemas = self.envelope(["schema", "--json"], cwd)
@@ -811,6 +811,10 @@ class EvalctlCliTests(unittest.TestCase):
 
             listed = self.envelope(["jobs", "list", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             by_id = {item["run_id"]: item for item in listed["data"]["runs"]}
+            self.assertEqual(listed["data"]["count"], 4)
+            self.assertEqual(listed["data"]["total_count"], 4)
+            self.assertEqual(listed["meta"]["pagination"], {"limit": 50, "cursor": None, "next_cursor": None, "has_more": False})
+            self.assertEqual(listed["meta"]["truncated"], {"by_limit": False, "omitted": 0})
             self.assertEqual(by_id["completed"]["state"], "completed")
             self.assertEqual(by_id["live"]["state"], "running")
             self.assertEqual(by_id["stale"]["state"], "stale")
@@ -840,6 +844,60 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertFalse((stale / ".reservation.json").exists())
             self.assertTrue((stale / ".spoolctl.db").exists())
             self.assertFalse(orphaned.exists())
+
+    def test_jobs_list_is_bounded_and_cursor_paginated(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            runs = cwd / "evals" / "runs"
+            runs.mkdir(parents=True)
+            for idx in range(55):
+                (runs / f"run-{idx:03d}").mkdir()
+
+            first = self.envelope(["jobs", "list", "--json"], cwd)
+            self.assertEqual(first["data"]["count"], 50)
+            self.assertEqual(first["data"]["total_count"], 55)
+            self.assertEqual([item["run_id"] for item in first["data"]["runs"][:3]], ["run-000", "run-001", "run-002"])
+            self.assertEqual(first["data"]["runs"][-1]["run_id"], "run-049")
+            self.assertEqual(first["meta"]["pagination"], {"limit": 50, "cursor": None, "next_cursor": "run-049", "has_more": True})
+            self.assertEqual(first["meta"]["truncated"], {"by_limit": True, "omitted": 5})
+            self.assertEqual(first["commands"][0]["command"], "evalctl jobs list --limit 50 --cursor run-049 --json")
+
+            second = self.envelope(["jobs", "list", "--limit", "10", "--cursor", first["meta"]["pagination"]["next_cursor"], "--json"], cwd)
+            self.assertEqual([item["run_id"] for item in second["data"]["runs"]], ["run-050", "run-051", "run-052", "run-053", "run-054"])
+            self.assertEqual(second["meta"]["pagination"], {"limit": 10, "cursor": "run-049", "next_cursor": None, "has_more": False})
+            self.assertEqual(second["meta"]["truncated"], {"by_limit": False, "omitted": 0})
+
+            pruned_cursor = self.envelope(["jobs", "list", "--limit", "3", "--cursor", "run-020a", "--json"], cwd)
+            self.assertEqual([item["run_id"] for item in pruned_cursor["data"]["runs"]], ["run-021", "run-022", "run-023"])
+
+            normalized = self.normalize_envelope_semantic_meta(first)
+            self.assertEqual(normalized["meta"]["pagination"]["next_cursor"], "run-049")
+            self.assertEqual(normalized["meta"]["truncated"]["omitted"], 5)
+            self.assertIn("data_hash", normalized["meta"])
+
+    def test_jobs_list_rejects_bad_pagination_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            for args in (
+                ["jobs", "list", "--limit", "0", "--json"],
+                ["jobs", "list", "--limit", "-1", "--json"],
+                ["jobs", "list", "--limit", "nope", "--json"],
+                ["jobs", "list", "--limit", "1001", "--json"],
+            ):
+                with self.subTest(args=args):
+                    result = self.run_cli(args, cwd, expect=1)
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload["errors"][0]["code"], "E_CASE_INVALID")
+
+            get_bad = self.run_cli(["jobs", "get", "completed", "--limit", "5", "--json"], cwd, expect=1)
+            get_error = json.loads(get_bad.stdout)["errors"][0]
+            self.assertEqual(get_error["code"], "E_CASE_INVALID")
+            self.assertEqual(get_error["corrected_command"], "evalctl jobs list --limit 50 --json")
+
+            prune_bad = self.run_cli(["jobs", "prune", "--cursor", "run-049", "--json"], cwd, expect=1)
+            prune_error = json.loads(prune_bad.stdout)["errors"][0]
+            self.assertEqual(prune_error["code"], "E_CASE_INVALID")
+            self.assertEqual(prune_error["corrected_command"], "evalctl jobs list --limit 50 --json")
 
     def test_case_execution_phase_helpers_are_callable(self) -> None:
         with tempfile.TemporaryDirectory() as td:

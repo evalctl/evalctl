@@ -28,6 +28,8 @@ CONTRACT_VERSION = 1
 TOOL = "evalctl"
 DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
 DEFAULT_RESERVATION_TTL_SECONDS = 3600
+DEFAULT_JOBS_LIST_LIMIT = 50
+MAX_JOBS_LIST_LIMIT = 1000
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 BUILTIN_SCORERS = ("contains", "regex", "exact", "json-schema", "numeric-threshold", "file-exists", "exit-code", "workspace-diff")
 
@@ -100,7 +102,7 @@ def sha256_bytes(value: bytes) -> str:
 
 def envelope(data: Any, *, ok: bool = True, warnings: list[dict[str, Any]] | None = None,
              commands: list[dict[str, Any]] | None = None, errors: list[dict[str, Any]] | None = None,
-             started: float | None = None) -> dict[str, Any]:
+             started: float | None = None, meta_extra: dict[str, Any] | None = None) -> dict[str, Any]:
     started = started or time.time()
     payload = data if ok else None
     meta: dict[str, Any] = {
@@ -110,6 +112,8 @@ def envelope(data: Any, *, ok: bool = True, warnings: list[dict[str, Any]] | Non
         "contract_version": CONTRACT_VERSION,
         "elapsed_ms": int((time.time() - started) * 1000),
     }
+    if meta_extra:
+        meta.update(meta_extra)
     return {
         "ok": ok,
         "tool_version": __version__,
@@ -154,9 +158,10 @@ def strip_flags(argv: list[str], flags_with_values: set[str], bool_flags: set[st
 
 
 def print_envelope(data: Any, *, json_mode: bool, human: str | None = None, warnings: list[dict[str, Any]] | None = None,
-                   commands: list[dict[str, Any]] | None = None, started: float | None = None) -> int:
+                   commands: list[dict[str, Any]] | None = None, started: float | None = None,
+                   meta_extra: dict[str, Any] | None = None) -> int:
     if json_mode:
-        print(stable_json(envelope(data, warnings=warnings, commands=commands, started=started)))
+        print(stable_json(envelope(data, warnings=warnings, commands=commands, started=started, meta_extra=meta_extra)))
     else:
         print(human if human is not None else json.dumps(data, indent=2, sort_keys=True))
     return 0
@@ -216,7 +221,7 @@ def capabilities_data() -> dict[str, Any]:
         "init": {"description": "Scaffold evals/ tree with sample code-review suite.", "json": True, "mutates": True, "flags": ["--json", "--force"], "exit_codes": [0, 5]},
         "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
         "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
-        "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force"], "exit_codes": [0, 1]},
+        "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force", "--limit", "--cursor"], "exit_codes": [0, 1]},
         "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
         "suite": {"description": "Author suites, including suite add.", "json": True, "mutates": True, "args": ["add", "name"], "flags": ["--json", "--runner-argv", "--runner-command", "--shell"], "exit_codes": [0, 1, 5]},
         "case": {"description": "Author cases, including case add.", "json": True, "mutates": True, "args": ["add", "suite"], "flags": ["--json", "--task", "--workspace", "--id", "--diff", "--expect-json"], "exit_codes": [0, 1, 5]},
@@ -227,7 +232,7 @@ def capabilities_data() -> dict[str, Any]:
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
@@ -304,6 +309,7 @@ DATA_SCHEMAS = {
         {
             "runs": {"type": "array", "items": {"type": "object"}},
             "count": {"type": "integer", "minimum": 0},
+            "total_count": {"type": "integer", "minimum": 0},
             "run_id": {"type": "string"},
             "run_dir": {"type": "string"},
             "state": {"type": "string"},
@@ -425,8 +431,11 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 5. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
    `run.json`, terminal `cases/<id>/state.json` markers, and the original suite snapshot;
    it skips terminal cases and re-runs only unfinished cases.
-6. Use `jobs list|get|prune --json` to inspect completed, running, stale, and orphaned
-   local run state. Reservations are TTL files with a background heartbeat; no daemon or
+6. Use `jobs list --limit 50 --json` to inspect completed, running, stale, and
+   orphaned local run state. List output is bounded by default and returns
+   `meta.pagination.next_cursor` plus a next-page command when more runs exist.
+   Use `jobs get <run-id> --json` and `jobs prune --json` for single-run inspection
+   and cleanup. Reservations are TTL files with a background heartbeat; no daemon or
    lock server is required.
 7. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
    execution to spoolctl. Spoolctl is optional and must be >= 0.4.1; absent or incompatible
@@ -708,6 +717,21 @@ def parse_positive_int_flag(argv: list[str], flag: str, default: int) -> int:
         raise EvalctlError("E_CASE_INVALID", f"{flag} must be a positive integer (got {raw})", f"provide {flag} as a positive integer", 1)
     if value < 1:
         raise EvalctlError("E_CASE_INVALID", f"{flag} must be at least 1 (got {value})", f"provide {flag} as a positive integer", 1)
+    return value
+
+
+def parse_jobs_list_limit(argv: list[str]) -> int:
+    raw = value_after(argv, "--limit")
+    if raw is None:
+        return DEFAULT_JOBS_LIST_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        raise EvalctlError("E_CASE_INVALID", f"--limit must be a positive integer (got {raw})", f"try: {TOOL} jobs list --limit {DEFAULT_JOBS_LIST_LIMIT} --json", 1)
+    if value < 1:
+        raise EvalctlError("E_CASE_INVALID", f"--limit must be at least 1 (got {value})", f"try: {TOOL} jobs list --limit {DEFAULT_JOBS_LIST_LIMIT} --json", 1)
+    if value > MAX_JOBS_LIST_LIMIT:
+        raise EvalctlError("E_CASE_INVALID", f"--limit must be at most {MAX_JOBS_LIST_LIMIT} (got {value})", f"try: {TOOL} jobs list --limit {MAX_JOBS_LIST_LIMIT} --json", 1)
     return value
 
 
@@ -2081,15 +2105,37 @@ def classify_run_dir(run_dir: Path) -> dict[str, Any]:
 
 
 def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, set(), {"--json", "--no-color", "--yes", "--force"})
+    args = strip_flags(argv, {"--limit", "--cursor"}, {"--json", "--no-color", "--yes", "--force"})
     if len(args) < 2:
         raise EvalctlError("E_CASE_INVALID", "jobs requires list, get, or prune", "try: evalctl jobs list --json", 1)
     subcommand = args[1]
+    if subcommand in {"get", "prune"} and ("--limit" in argv or "--cursor" in argv):
+        raise EvalctlError("E_CASE_INVALID", f"jobs {subcommand} does not accept list pagination flags", "try: evalctl jobs list --limit 50 --json", 1, corrected_command="evalctl jobs list --limit 50 --json")
     root = runs_root()
     run_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name) if root.exists() else []
     if subcommand == "list":
-        runs = [classify_run_dir(path) for path in run_dirs]
-        return print_envelope({"runs": runs, "count": len(runs)}, json_mode=json_mode, human="\n".join(f"{r['run_id']}\t{r['state']}" for r in runs), started=started)
+        limit = parse_jobs_list_limit(argv)
+        cursor = value_after(argv, "--cursor")
+        if cursor is None:
+            page_dirs = run_dirs
+        else:
+            page_dirs = [path for path in run_dirs if path.name > cursor]
+        page = page_dirs[:limit]
+        runs = [classify_run_dir(path) for path in page]
+        has_more = len(page_dirs) > limit
+        next_cursor = runs[-1]["run_id"] if has_more and runs else None
+        data = {"runs": runs, "count": len(runs), "total_count": len(run_dirs)}
+        meta_extra = {
+            "pagination": {"limit": limit, "cursor": cursor, "next_cursor": next_cursor, "has_more": has_more},
+            "truncated": {"by_limit": has_more, "omitted": max(len(page_dirs) - len(page), 0)},
+        }
+        commands = []
+        if has_more and next_cursor is not None:
+            commands.append({"command": f"evalctl jobs list --limit {limit} --cursor {shlex.quote(next_cursor)} --json", "rationale": "Fetch the next page of runs."})
+        human = "\n".join(f"{r['run_id']}\t{r['state']}" for r in runs)
+        if has_more and sys.stdout.isatty() and next_cursor is not None:
+            human = (human + "\n" if human else "") + f"Next page: evalctl jobs list --limit {limit} --cursor {shlex.quote(next_cursor)}"
+        return print_envelope(data, json_mode=json_mode, human=human, commands=commands, started=started, meta_extra=meta_extra)
     if subcommand == "get":
         if len(args) != 3:
             raise EvalctlError("E_CASE_INVALID", "jobs get requires a run id", "try: evalctl jobs get <run-id> --json", 1)
