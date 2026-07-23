@@ -1,5 +1,9 @@
 # evalctl
 
+[![CI](https://github.com/evalctl/evalctl/actions/workflows/ci.yml/badge.svg)](https://github.com/evalctl/evalctl/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+
 **Local-first evals for agents, not just prompts.**
 
 evalctl treats eval cases as files, runners as shell commands, and results as
@@ -47,7 +51,27 @@ warnings/errors, real schema output, and artifact replay from a copied run
 directory.
 `contract_version` remains `1`.
 
-## Commands
+## Install
+
+Requires Python 3.11+ and has no runtime dependencies (standard library only).
+
+From source:
+
+```bash
+pip install "git+https://github.com/evalctl/evalctl.git"
+```
+
+For development, clone and install editable:
+
+```bash
+git clone https://github.com/evalctl/evalctl.git
+cd evalctl
+pip install -e .
+```
+
+## Quickstart
+
+Scaffold a project, author a suite, run it, and read the report:
 
 ```bash
 evalctl init --json
@@ -125,6 +149,10 @@ Command-scorer verdicts are captured once under
 `cases/<case_id>/scorers/<id>.json`. Reports and artifact replay read that
 artifact and do not re-execute the scorer binary. Command scorers run arbitrary
 local code and are covered by the same unsandboxed-runner warning as runners.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Home
 
