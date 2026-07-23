@@ -214,6 +214,167 @@ class EvalctlCliTests(unittest.TestCase):
         script.chmod(0o755)
         return bindir
 
+    def normalize_envelope_semantic_meta(self, payload: dict) -> dict:
+        normalized = json.loads(json.dumps(payload))
+        meta = normalized.get("meta")
+        if isinstance(meta, dict):
+            for key in ("request_id", "ts_iso", "elapsed_ms"):
+                meta.pop(key, None)
+        return normalized
+
+    def install_fake_inferctl(self, cwd: Path, *, capabilities_shape: str = "compatible",
+                              preflight_mode: str = "success", route_mode: str = "success",
+                              envelope_shape: bool = True) -> Path:
+        bindir = cwd / "bin"
+        bindir.mkdir(exist_ok=True)
+        script = bindir / "inferctl"
+        # Shapes copied from inferctl v0.2 contract goldens:
+        # internal/contract/capabilities.golden.json and testdata/contract/{preflight,route}.golden.json.
+        capabilities = {
+            "tool": "inferctl",
+            "binary": "inferctl",
+            "contract_version": "0.2",
+            "features": ["json_envelope", "contract_goldens", "mega_command_plan"],
+            "global_flags": {
+                "--help": {"type": "bool", "default": False, "description": "Show terse human help."},
+                "--json": {"type": "bool", "default": False, "description": "Emit the universal JSON envelope."},
+            },
+            "verbs": [
+                {
+                    "name": "route",
+                    "summary": "Compute and explain a route for a configured task.",
+                    "mega_command": "PLAN",
+                    "flags": [
+                        {"name": "--prompt-file", "type": "string", "default": None},
+                        {"name": "--prompt", "type": "string", "default": None},
+                        {"name": "--from-stdin", "type": "bool", "default": False},
+                        {"name": "--json", "type": "bool", "default": False},
+                    ],
+                    "args": [{"name": "task", "required": True}],
+                    "exit_codes": [0, 1, 3, 4],
+                    "output_schema_ref": "#/schemas/route_explanation",
+                    "emits_data_on_failure": False,
+                },
+                {
+                    "name": "preflight",
+                    "summary": "Decide whether automation may attempt a configured task.",
+                    "mega_command": "TASK_READINESS",
+                    "flags": [
+                        {"name": "--prompt-file", "type": "string", "default": None},
+                        {"name": "--prompt", "type": "string", "default": None},
+                        {"name": "--from-stdin", "type": "bool", "default": False},
+                        {"name": "--allow-fallback", "type": "bool", "default": False},
+                        {"name": "--require-ready", "type": "bool", "default": False},
+                        {"name": "--json", "type": "bool", "default": False},
+                    ],
+                    "args": [{"name": "task", "required": True}],
+                    "exit_codes": [0, 1, 3, 4, 5],
+                    "output_schema_ref": "#/schemas/preflight_report",
+                    "emits_data_on_failure": True,
+                },
+            ],
+        }
+        route = {
+            "task": "code",
+            "input": {"prompt_chars": 0, "estimated_tokens": 0, "source": "none"},
+            "decision": {
+                "selected_model": "qwen3:8b",
+                "selected_backend": "ollama",
+                "is_fallback": False,
+                "fallback_index": None,
+                "ready": True,
+                "estimated_first_token_ms": None,
+                "estimated_total_ms": None,
+                "reason": "primary model is available",
+            },
+            "candidates": [
+                {
+                    "model": "qwen3:8b",
+                    "backend": "ollama",
+                    "role": "primary",
+                    "fallback_index": None,
+                    "available": True,
+                    "unavailability_reason": None,
+                    "loaded": True,
+                    "estimated_first_token_ms": None,
+                }
+            ],
+            "constraints": {
+                "profile": "default_local_workstation",
+                "max_context_tokens": 8192,
+                "context_used_tokens": 0,
+                "context_pct": 0,
+                "max_concurrent_models": 1,
+                "current_loaded_count": 1,
+                "allow_premium": False,
+                "selected_is_premium": None,
+            },
+        }
+        preflight = {
+            "policy": {"allow_fallback": False, "require_ready": False},
+            "preflight_schema_version": "0.1",
+            "prompt": {"source_kind": "none", "source": "none", "prompt_chars": 0, "estimated_tokens": 0},
+            "recommended_action": {
+                "command": "inferctl route code --json",
+                "rationale": "Review the underlying route candidates and constraints",
+                "alternatives": [{"command": "inferctl backends --filter ollama --json", "rationale": "Check reachability"}],
+            },
+            "route": route,
+            "route_decision": route["decision"],
+            "runnability": {"status": "runnable", "runnable": True, "exit_code": 0, "reason": "route satisfies preflight policy"},
+            "runnability_status": "runnable",
+            "runnable": True,
+            "summary": {"status": "runnable", "message": "route satisfies preflight policy"},
+            "warnings": [],
+        }
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys, time\n"
+            f"CAPABILITIES = {capabilities!r}\n"
+            f"PREFLIGHT = {preflight!r}\n"
+            f"ROUTE = {route!r}\n"
+            f"CAPABILITIES_SHAPE = {capabilities_shape!r}\n"
+            f"PREFLIGHT_MODE = {preflight_mode!r}\n"
+            f"ROUTE_MODE = {route_mode!r}\n"
+            f"ENVELOPE_SHAPE = {envelope_shape!r}\n"
+            "def emit(data, code=0):\n"
+            "    print(json.dumps({'ok': True, 'data': data}, sort_keys=True) if ENVELOPE_SHAPE else json.dumps(data, sort_keys=True))\n"
+            "    raise SystemExit(code)\n"
+            "args = sys.argv[1:]\n"
+            "if args[:2] == ['capabilities', '--json']:\n"
+            "    if CAPABILITIES_SHAPE == 'invalid-json': print('{not json'); raise SystemExit(0)\n"
+            "    data = dict(CAPABILITIES)\n"
+            "    if CAPABILITIES_SHAPE == 'missing-preflight': data['verbs'] = [v for v in data['verbs'] if v['name'] != 'preflight']\n"
+            "    if CAPABILITIES_SHAPE == 'preflight-only': data['verbs'] = [v for v in data['verbs'] if v['name'] != 'route']\n"
+            "    if CAPABILITIES_SHAPE == 'error-envelope': print(json.dumps({'ok': False, 'errors': [{'code': 'BROKEN'}]}, sort_keys=True)); raise SystemExit(0)\n"
+            "    emit(data)\n"
+            "if args and args[0] == 'preflight':\n"
+            "    if PREFLIGHT_MODE == 'hang': time.sleep(30)\n"
+            "    if PREFLIGHT_MODE == 'invalid-json': print('{not json'); raise SystemExit(0)\n"
+            "    data = dict(PREFLIGHT)\n"
+            "    if PREFLIGHT_MODE == 'nonzero-with-data':\n"
+            "        data['runnability'] = {'status': 'config_error', 'runnable': False, 'exit_code': 3, 'reason': 'configuration unavailable'}\n"
+            "        data['runnability_status'] = 'config_error'; data['runnable'] = False; data['summary'] = {'status': 'config_error', 'message': 'configuration unavailable'}\n"
+            "        emit(data, 3)\n"
+            "    if PREFLIGHT_MODE == 'policy-blocked':\n"
+            "        data['runnability'] = {'status': 'policy_blocked', 'runnable': False, 'exit_code': 5, 'reason': 'policy blocked route'}\n"
+            "        data['runnability_status'] = 'policy_blocked'; data['runnable'] = False; data['summary'] = {'status': 'policy_blocked', 'message': 'policy blocked route'}\n"
+            "        emit(data, 5)\n"
+            "    emit(data)\n"
+            "if args and args[0] == 'route':\n"
+            "    if ROUTE_MODE == 'nonzero-without-data': print('route failed', file=sys.stderr); raise SystemExit(3)\n"
+            "    if ROUTE_MODE == 'invalid-json': print('{not json'); raise SystemExit(0)\n"
+            "    emit(ROUTE)\n"
+            "print('bad fake inferctl invocation', args, file=sys.stderr); raise SystemExit(2)\n"
+        )
+        script.chmod(0o755)
+        return bindir
+
+    def run_fake_tool(self, bindir: Path, binary: str, args: list[str], expect: int = 0) -> dict:
+        result = subprocess.run([str(bindir / binary), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, expect, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
+        return json.loads(result.stdout)
+
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
@@ -362,6 +523,106 @@ class EvalctlCliTests(unittest.TestCase):
             bindir = self.install_fake_spoolctl(cwd, version="0.4.2-rc1", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2-rc1")
+
+    def test_fake_inferctl_fixture_preserves_contract_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_inferctl(cwd)
+            caps = self.run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
+            data = caps["data"]
+            self.assertEqual(data["contract_version"], "0.2")
+            self.assertIsInstance(data["verbs"], list)
+            verbs = {verb["name"]: verb for verb in data["verbs"]}
+            self.assertIn("route", verbs)
+            self.assertIn("preflight", verbs)
+            self.assertIn("--prompt-file", {flag["name"] for flag in verbs["route"]["flags"]})
+            self.assertIn("--allow-fallback", {flag["name"] for flag in verbs["preflight"]["flags"]})
+            self.assertTrue(verbs["preflight"]["emits_data_on_failure"])
+
+            preflight = self.run_fake_tool(bindir, "inferctl", ["preflight", "code", "--prompt-file", "task.txt", "--json"])
+            preflight_data = preflight["data"]
+            for key in ("route_decision", "route", "runnability", "policy", "runnable"):
+                self.assertIn(key, preflight_data)
+            self.assertEqual(preflight_data["route_decision"]["selected_backend"], "ollama")
+            self.assertEqual(preflight_data["route_decision"]["selected_model"], "qwen3:8b")
+
+            route = self.run_fake_tool(bindir, "inferctl", ["route", "code", "--prompt-file", "task.txt", "--json"])
+            route_data = route["data"]
+            self.assertEqual(route_data["decision"]["selected_backend"], "ollama")
+            self.assertEqual(route_data["decision"]["selected_model"], "qwen3:8b")
+            self.assertIsInstance(route_data["candidates"], list)
+
+    def test_fake_inferctl_fixture_supports_required_failure_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight", preflight_mode="nonzero-with-data", route_mode="nonzero-without-data")
+            caps = self.run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
+            self.assertNotIn("preflight", {verb["name"] for verb in caps["data"]["verbs"]})
+
+            preflight = self.run_fake_tool(bindir, "inferctl", ["preflight", "code", "--prompt-file", "task.txt", "--json"], expect=3)
+            self.assertFalse(preflight["data"]["runnable"])
+            self.assertEqual(preflight["data"]["runnability"]["status"], "config_error")
+
+            route = subprocess.run([str(bindir / "inferctl"), "route", "code", "--prompt-file", "task.txt", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(route.returncode, 3)
+            self.assertEqual(route.stdout, "")
+            self.assertIn("route failed", route.stderr)
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="preflight-only", envelope_shape=False)
+            raw = self.run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
+            self.assertIn("preflight", {verb["name"] for verb in raw["verbs"]})
+            self.assertNotIn("route", {verb["name"] for verb in raw["verbs"]})
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="invalid-json")
+            bad = subprocess.run([str(bindir / "inferctl"), "capabilities", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(bad.returncode, 0)
+            with self.assertRaises(json.JSONDecodeError):
+                json.loads(bad.stdout)
+
+    def test_envelope_normalization_keeps_semantic_meta(self) -> None:
+        payload = {
+            "ok": True,
+            "data": {"runs": []},
+            "meta": {
+                "request_id": "req_123",
+                "ts_iso": "2026-07-23T00:00:00Z",
+                "elapsed_ms": 7,
+                "data_hash": "sha256:value",
+                "contract_version": 1,
+                "pagination": {"limit": 50, "cursor": None, "next_cursor": "abc", "has_more": True},
+                "truncated": {"by_limit": True, "omitted": 17},
+            },
+        }
+        normalized = self.normalize_envelope_semantic_meta(payload)
+        self.assertNotIn("request_id", normalized["meta"])
+        self.assertNotIn("ts_iso", normalized["meta"])
+        self.assertNotIn("elapsed_ms", normalized["meta"])
+        self.assertEqual(normalized["meta"]["pagination"]["next_cursor"], "abc")
+        self.assertEqual(normalized["meta"]["truncated"]["omitted"], 17)
+        self.assertEqual(normalized["meta"]["data_hash"], "sha256:value")
+
+    def test_real_inferctl_shape_smoke_when_enabled(self) -> None:
+        if not os.environ.get("EVALCTL_REAL_INFERCTL_SMOKE"):
+            self.skipTest("set EVALCTL_REAL_INFERCTL_SMOKE=1 to compare fake inferctl shapes against a real binary")
+        real = shutil.which("inferctl")
+        if not real:
+            self.skipTest("inferctl binary is not available on PATH")
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            fake = self.install_fake_inferctl(cwd)
+            fake_caps = self.run_fake_tool(fake, "inferctl", ["capabilities", "--json"])
+            real_caps_result = subprocess.run([real, "capabilities", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(real_caps_result.returncode, 0, msg=real_caps_result.stderr)
+            real_caps = json.loads(real_caps_result.stdout)
+            real_data = real_caps.get("data", real_caps)
+            fake_data = fake_caps.get("data", fake_caps)
+            self.assertIsInstance(real_data["verbs"], list)
+            self.assertEqual({verb["name"] for verb in fake_data["verbs"]}, {verb["name"] for verb in fake_data["verbs"]} & {verb["name"] for verb in real_data["verbs"]})
+            self.assertIn("preflight", {verb["name"] for verb in real_data["verbs"]})
 
     def test_init_validate_run_status_report_and_artifact_replay(self) -> None:
         with tempfile.TemporaryDirectory() as td:
