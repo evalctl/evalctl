@@ -382,7 +382,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:b6d3f000cde58b376ac7d14da9b6277d818fc265f1ae3e87d80c6429c91d4d05")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:326d9c9bb79b9f6fbae21c6c5da2b21a7652af9a9bb74da7693e7d7b54ee2e4d")
             self.assertEqual(caps["tool_version"], "0.3.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -406,7 +406,9 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--reservation-ttl", caps["data"]["verbs"]["run"]["flags"])
             self.assertEqual(caps["data"]["verbs"]["doctor"]["mega_command"], "DIAGNOSE")
             self.assertEqual(caps["data"]["verbs"]["doctor"]["exit_codes"], [0, 1])
-            for verb in ("run", "jobs", "replay", "suite", "case", "scorer", "doctor"):
+            self.assertEqual(caps["data"]["verbs"]["plan"]["mega_command"], "PLAN")
+            self.assertEqual(caps["data"]["verbs"]["plan"]["exit_codes"], [0, 1])
+            for verb in ("run", "jobs", "replay", "suite", "case", "scorer", "doctor", "plan"):
                 self.assertIn(verb, caps["data"]["verbs"])
             schema = self.envelope(["schema", "run", "--json"], cwd)
             self.assertTrue(schema["ok"])
@@ -422,7 +424,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("queue_jobs", jobs_schema["data"]["schemas"]["jobs"]["properties"])
 
             all_schemas = self.envelope(["schema", "--json"], cwd)
-            for verb in ("capabilities", "schema", "init", "validate", "doctor", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"):
+            for verb in ("capabilities", "schema", "init", "validate", "doctor", "plan", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"):
                 verb_schema = all_schemas["data"]["schemas"][verb]
                 self.assertIn("properties", verb_schema)
                 self.assertIn("required", verb_schema)
@@ -430,7 +432,10 @@ class EvalctlCliTests(unittest.TestCase):
             doctor_schema = self.envelope(["schema", "doctor", "--json"], cwd)
             self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:6582f8cd37fd09b9ad29c9422da0e2418a5d5a6f9c2105e4dd14f149ef11e0e4")
             self.assertIn("doctor", doctor_schema["data"]["schemas"])
-            for verb in ("jobs", "replay", "suite", "case", "scorer", "doctor"):
+            plan_schema = self.envelope(["schema", "plan", "--json"], cwd)
+            self.assertEqual(plan_schema["meta"]["data_hash"], "sha256:1a71ef66f11e8dbc3895f21cdf60d516e17a1cb7d59576fb84bb938367bb82da")
+            self.assertIn("plan", plan_schema["data"]["schemas"])
+            for verb in ("jobs", "replay", "suite", "case", "scorer", "doctor", "plan"):
                 single_schema = self.envelope(["schema", verb, "--json"], cwd)
                 self.assertIn(verb, single_schema["data"]["schemas"])
                 self.assertTrue(single_schema["data"]["schemas"][verb]["additionalProperties"])
@@ -441,6 +446,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("does not put the per-case reason code in `errors[]`", docs.stdout)
             self.assertIn("did_you_mean", docs.stdout)
             self.assertIn("doctor --json", docs.stdout)
+            self.assertIn("plan code-review --json", docs.stdout)
             self.assertIn("run --resume", docs.stdout)
             self.assertIn("--queue spoolctl", docs.stdout)
 
@@ -991,6 +997,80 @@ class EvalctlCliTests(unittest.TestCase):
             inferctl = compatible["data"]["components"]["inferctl"]
             self.assertEqual(inferctl["state"], "healthy")
             self.assertFalse(inferctl["observed"]["route_available"])
+
+    def test_plan_is_side_effect_free_and_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            runs = cwd / "evals" / "runs"
+            before = sorted(p.name for p in runs.iterdir())
+
+            first = self.envelope(["plan", "code-review", "--json"], cwd)
+            second = self.envelope(["plan", "code-review", "--json"], cwd)
+            self.assertEqual(sorted(p.name for p in runs.iterdir()), before)
+            self.assertEqual(first["data"]["run"]["run_id"], None)
+            self.assertEqual(first["data"]["run"]["run_id_strategy"], "generated_at_run_time")
+            self.assertEqual(first["data"]["run"]["run_dir"], None)
+            self.assertEqual(first["data"]["dependency_graph"], {"kind": "independent_cases", "edges": []})
+            self.assertEqual(self.normalize_envelope_semantic_meta(first), self.normalize_envelope_semantic_meta(second))
+
+            planned = self.envelope(["plan", "code-review", "--run-id", "planned", "--json"], cwd)
+            self.assertEqual(planned["data"]["run"]["run_id"], "planned")
+            self.assertEqual(planned["data"]["run"]["run_dir"], "evals/runs/planned")
+            self.assertFalse((runs / "planned").exists())
+
+            parallel = self.envelope(["plan", "code-review", "--jobs", "2", "--json"], cwd)
+            self.assertEqual(parallel["data"]["plan"]["summary"]["parallel_tracks"], 2)
+            self.assertEqual([track["id"] for track in parallel["data"]["plan"]["tracks"]], ["slot-1", "slot-2"])
+
+            infer = self.envelope(["plan", "code-review", "--inferctl-task", "code", "--json"], cwd)
+            self.assertTrue(all(case["provenance"]["inferctl"]["requested"] for case in infer["data"]["cases"]))
+            self.assertFalse(list(runs.glob("*/cases/*/inferctl-*")))
+
+            bad_flag = self.run_cli(["plan", "code-review", "--jsno"], cwd, expect=1)
+            self.assertEqual(json.loads(bad_flag.stdout)["errors"][0]["code"], "E_UNKNOWN_FLAG")
+
+    def test_plan_resume_and_blocked_queue_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.write_resume_runner(cwd)
+            log_path = cwd / "runner.log"
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env.update({"SOURCE_DATE_EPOCH": "1700000000", "RUN_LOG": str(log_path), "SLEEP_CASE": "cr-pass"})
+            proc = subprocess.Popen(
+                CMD + ["run", "code-review", "--run-id", "resume-plan", "--jobs", "1", "--reservation-ttl", "1", "--json"],
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            first_marker = cwd / "evals" / "runs" / "resume-plan" / "cases" / "cr-fail" / "state.json"
+            deadline = time.time() + 10
+            while time.time() < deadline and not first_marker.exists():
+                time.sleep(0.05)
+            self.assertTrue(first_marker.exists(), "first case never reached terminal marker")
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=5)
+            time.sleep(1.2)
+
+            resume_plan = self.envelope(["plan", "--resume", "resume-plan", "--json"], cwd)
+            actions = {case["id"]: case["action"] for case in resume_plan["data"]["cases"]}
+            self.assertEqual(actions["cr-fail"], "skip_terminal")
+            self.assertEqual(actions["cr-pass"], "run")
+            self.assertEqual(resume_plan["data"]["run"]["mode"], "resume")
+
+            queued = self.envelope(["plan", "code-review", "--run-id", "queued-plan", "--queue", "spoolctl", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(queued["data"]["run"]["mode"], "blocked")
+            self.assertEqual({case["action"] for case in queued["data"]["cases"]}, {"blocked"})
+            self.assertIn("E_SPOOLCTL_UNAVAILABLE", {warning["code"] for warning in queued["warnings"]})
+            self.assertFalse((cwd / "evals" / "runs" / "queued-plan").exists())
 
     def test_case_execution_phase_helpers_are_callable(self) -> None:
         with tempfile.TemporaryDirectory() as td:

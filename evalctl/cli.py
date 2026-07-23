@@ -76,7 +76,7 @@ CODE_REGISTRY = {
     "W_RESUME_NOTHING_PENDING": {"class": "warning", "where": ["resume"], "surface": "envelope"},
 }
 
-VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report", "doctor"})
+VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report", "doctor", "plan"})
 SUBCOMMANDS = {
     "jobs": frozenset({"list", "get", "prune"}),
     "suite": frozenset({"add"}),
@@ -92,6 +92,8 @@ JOBS_FLAGS_WITH_VALUES = {"--limit", "--cursor"}
 JOBS_BOOL_FLAGS = {"--json", "--no-color", "--yes", "--force"}
 DOCTOR_FLAGS_WITH_VALUES = {"--component"}
 DOCTOR_BOOL_FLAGS = {"--json", "--no-color", "--fast"}
+PLAN_FLAGS_WITH_VALUES = {"--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--inferctl-task"}
+PLAN_BOOL_FLAGS = {"--json", "--no-color"}
 DOCTOR_COMPONENTS = frozenset({"runtime", "suite_root", "runs_root", "reservations", "spoolctl", "inferctl", "runner_safety"})
 OPTIONAL_COMPONENT_STATES = {"not_configured", "unknown"}
 
@@ -262,6 +264,7 @@ COMMANDS:
   init [--force]                   Scaffold evals/ with code-review suite
   validate [suite] [--json]        Validate suite files
   doctor [--component NAME] [--fast] [--json]
+  plan <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--inferctl-task TASK] [--json]
   run <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
   jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
@@ -298,6 +301,7 @@ def capabilities_data() -> dict[str, Any]:
         "init": {"description": "Scaffold evals/ tree with sample code-review suite.", "json": True, "mutates": True, "flags": ["--json", "--force"], "exit_codes": [0, 5]},
         "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
         "doctor": {"description": "Diagnose evalctl runtime, run state, and optional integrations.", "json": True, "mutates": False, "flags": ["--json", "--component", "--fast"], "exit_codes": [0, 1], "mega_command": "DIAGNOSE"},
+        "plan": {"description": "Produce a side-effect-free execution plan.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--inferctl-task"], "exit_codes": [0, 1], "mega_command": "PLAN"},
         "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
         "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force", "--limit", "--cursor"], "exit_codes": [0, 1]},
         "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
@@ -310,7 +314,7 @@ def capabilities_data() -> dict[str, Any]:
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor", "plan"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
@@ -385,6 +389,18 @@ DATA_SCHEMAS = {
             "components": {"type": "object", "additionalProperties": {"type": "object"}},
             "recommended_action": schema_object(["command", "rationale", "is_destructive", "alternatives"], {"command": {"type": "string"}, "rationale": {"type": "string"}, "is_destructive": {"type": "boolean"}, "alternatives": {"type": "array"}}),
             "fallbacks_active": {"type": "array", "items": {"type": "object"}},
+        },
+    ),
+    "plan": schema_object(
+        ["suite", "run", "execution", "dependency_graph", "plan", "cases", "warnings"],
+        {
+            "suite": {"type": "object"},
+            "run": {"type": "object"},
+            "execution": {"type": "object"},
+            "dependency_graph": {"type": "object"},
+            "plan": {"type": "object"},
+            "cases": {"type": "array", "items": {"type": "object"}},
+            "warnings": {"type": "array", "items": {"type": "object"}},
         },
     ),
     "run": schema_object(
@@ -502,6 +518,7 @@ Schemas: `evalctl schema run --json`
 Initialize: `evalctl init --json`
 Validate: `evalctl validate code-review --json`
 Diagnose: `evalctl doctor --json`
+Plan: `evalctl plan code-review --json`
 Run: `evalctl run code-review --json`
 Inspect: `evalctl status <run-id> --json`
 Report: `evalctl report <run-id> --format json`
@@ -518,26 +535,29 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 4. Run `evalctl doctor --json` when local run state, optional integrations, or
    runtime health are unclear. Doctor exits 0 when it successfully diagnoses
    degraded components; malformed diagnostic input exits 1.
-5. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
-6. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
+5. Run `evalctl plan <suite> --json` to inspect the resolved case set, run/skip
+   actions, concurrency tracks, optional integration posture, and paste-ready
+   follow-up commands without creating a run directory or executing runners.
+6. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
+7. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
    `run.json`, terminal `cases/<id>/state.json` markers, and the original suite snapshot;
    it skips terminal cases and re-runs only unfinished cases.
-7. Use `jobs list --limit 50 --json` to inspect completed, running, stale, and
+8. Use `jobs list --limit 50 --json` to inspect completed, running, stale, and
    orphaned local run state. List output is bounded by default and returns
    `meta.pagination.next_cursor` plus a next-page command when more runs exist.
    Use `jobs get <run-id> --json` and `jobs prune --json` for single-run inspection
    and cleanup. Reservations are TTL files with a background heartbeat; no daemon or
    lock server is required.
-8. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
+9. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
    execution to spoolctl. Spoolctl is optional and must be >= 0.4.1; absent or incompatible
    spoolctl is a hard error only when `--queue spoolctl` is requested. The queue DB is
    per-run `.spoolctl.db`, so externally managed cross-machine workers require a shared
    filesystem and are not a general hosted-worker mode.
-9. Use `status` for run state and recommended next command.
-10. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
-11. Copy a completed run directory anywhere and run `report --run-dir <path> --format json`;
+10. Use `status` for run state and recommended next command.
+11. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
+12. Copy a completed run directory anywhere and run `report --run-dir <path> --format json`;
    evalctl recomputes scores from report artifacts and does not require durability sidecars.
-12. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
+13. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
    to re-execute only failed/errored cases into a fresh partial run. `replay --run-id`
    names the destination run, not the source.
 
@@ -2039,6 +2059,156 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
     return data, all_warnings, run_ok
 
 
+def plan_case_entry(case: dict[str, Any], action_name: str, reason: str, suite: dict[str, Any], *, inferctl_task: str | None = None) -> dict[str, Any]:
+    return {
+        "id": case["id"],
+        "action": action_name,
+        "reason": reason,
+        "runner": suite.get("runner", {}),
+        "workspace": {"source": case.get("workspace")},
+        "scorers": suite.get("scorers", []),
+        "provenance": {"inferctl": {"requested": inferctl_task is not None, "task": inferctl_task, "available": inferctl_binary() is not None}},
+    }
+
+
+def build_tracks(case_items: list[dict[str, Any]], jobs: int) -> list[dict[str, Any]]:
+    track_count = max(1, min(jobs, max(len([item for item in case_items if item["action"] == "run"]), 1)))
+    tracks = [{"id": f"slot-{idx + 1}", "items": []} for idx in range(track_count)]
+    run_index = 0
+    for item in case_items:
+        if item["action"] == "run":
+            tracks[run_index % track_count]["items"].append({"id": item["id"], "action": item["action"]})
+            run_index += 1
+    return tracks
+
+
+def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, PLAN_FLAGS_WITH_VALUES, PLAN_BOOL_FLAGS)
+    reject_unknown_flags(argv, args, PLAN_FLAGS_WITH_VALUES | PLAN_BOOL_FLAGS)
+    if len(args) > 2:
+        raise EvalctlError("E_CASE_INVALID", "plan accepts at most one suite positional", "try: evalctl plan code-review --json", 1)
+    resume_id = value_after(argv, "--resume")
+    run_id_arg = value_after(argv, "--run-id")
+    queue_backend = value_after(argv, "--queue")
+    slots_raw = value_after(argv, "--slots")
+    if slots_raw is not None and queue_backend is None:
+        raise EvalctlError("E_CASE_INVALID", "--slots requires --queue spoolctl", "try: evalctl plan code-review --queue spoolctl --slots 4 --json", 1)
+    if queue_backend is not None and queue_backend != "spoolctl":
+        raise EvalctlError("E_CASE_INVALID", f"unsupported queue backend: {queue_backend}", "supported value: --queue spoolctl", 1)
+    inferctl_task = value_after(argv, "--inferctl-task")
+    if inferctl_task is not None and not is_safe_id(inferctl_task):
+        raise EvalctlError("E_CASE_INVALID", f"unsafe inferctl task: {inferctl_task!r}", "use letters, digits, '.', '_' or '-'", 1)
+    jobs = parse_jobs(argv)
+    slots = parse_positive_int_flag(argv, "--slots", jobs) if queue_backend == "spoolctl" else None
+    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
+    warnings: list[dict[str, Any]] = []
+    commands: list[dict[str, str]] = []
+
+    completed_entries: dict[str, dict[str, Any]] = {}
+    if resume_id is not None:
+        run_dir = Path("evals") / "runs" / resume_id
+        if not run_dir.exists():
+            raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {resume_id}", "resume an existing incomplete run id", 1)
+        metadata = read_run_metadata(run_dir)
+        suite_dir = run_dir / "suite-snapshot"
+        suite = read_json(suite_dir / "suite.json")
+        cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+        completed_entries, pending_cases = split_completed_and_pending(run_dir, cases)
+        run_id = resume_id
+        run_dir_value: str | None = str(run_dir)
+        run_mode = "resume" if pending_cases else "existing_completed"
+        jobs = int(metadata["execution"]["jobs"])
+        execution_mode = "queued" if metadata["execution"].get("mode") == "queued" else "synchronous"
+        timeout_seconds = int(metadata["execution"]["timeout_seconds"])
+        case_items = [
+            plan_case_entry(case, "skip_terminal" if case["id"] in completed_entries else "run", "terminal case already completed" if case["id"] in completed_entries else "pending case", suite, inferctl_task=inferctl_task)
+            for case in cases
+        ]
+        suite_name = suite.get("name", suite_dir.name)
+        commands.append({"command": f"evalctl run --resume {shlex.quote(resume_id)} --json", "rationale": "Resume pending cases."})
+    else:
+        if len(args) != 2:
+            raise EvalctlError("E_SUITE_NOT_FOUND", "plan requires a suite name", "try: evalctl plan code-review --json", 1)
+        suite_dir = resolve_suite(args[1])
+        validate_suite(suite_dir)
+        suite = read_json(suite_dir / "suite.json")
+        cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
+        run_id = run_id_arg
+        run_dir = Path("evals") / "runs" / run_id if run_id else None
+        run_dir_value = str(run_dir) if run_dir is not None else None
+        run_mode = "fresh"
+        if run_dir is not None and run_dir.exists():
+            if (run_dir / "manifest.json").exists():
+                manifest_doc = read_json(run_dir / "manifest.json")
+                if run_identity(suite, suite_dir, cases) == manifest_identity(manifest_doc):
+                    run_mode = "existing_completed"
+                    commands.append({"command": f"evalctl report {shlex.quote(run_id)} --format json", "rationale": "Inspect existing completed run."})
+                else:
+                    run_mode = "blocked"
+                    warnings.append({"code": "W_PLAN_BLOCKED", "message": "run id is already completed for a different suite or case set"})
+                    commands.append({"command": "evalctl doctor --json", "rationale": "Inspect run conflict state."})
+            else:
+                reservation = read_reservation(run_dir)
+                run_mode = "blocked"
+                if reservation and reservation_is_live(reservation):
+                    warnings.append({"code": "W_PLAN_BLOCKED", "message": "run reservation is live"})
+                else:
+                    warnings.append({"code": "W_PLAN_BLOCKED", "message": "run is incomplete and may be resumable"})
+                    commands.append({"command": f"evalctl run --resume {shlex.quote(run_id)} --json", "rationale": "Resume incomplete run."})
+        execution_mode = "queued" if queue_backend == "spoolctl" else "synchronous"
+        timeout_seconds = timeout_seconds_for_run(suite, timeout_override)
+        case_items = [plan_case_entry(case, "blocked" if run_mode == "blocked" else "run", "plan is blocked" if run_mode == "blocked" else "pending case", suite, inferctl_task=inferctl_task) for case in cases]
+        suite_name = suite.get("name", suite_dir.name)
+        if run_mode == "fresh":
+            run_cmd = ["evalctl", "run", suite_name]
+            if run_id:
+                run_cmd.extend(["--run-id", run_id])
+            if jobs:
+                run_cmd.extend(["--jobs", str(jobs)])
+            if timeout_override is not None:
+                run_cmd.extend(["--timeout", str(timeout_override)])
+            if queue_backend:
+                run_cmd.extend(["--queue", queue_backend])
+            if slots is not None:
+                run_cmd.extend(["--slots", str(slots)])
+            if inferctl_task:
+                run_cmd.extend(["--inferctl-task", inferctl_task])
+            run_cmd.append("--json")
+            commands.append({"command": " ".join(shlex.quote(part) for part in run_cmd), "rationale": "Execute this plan."})
+
+    if queue_backend == "spoolctl":
+        try:
+            probe_spoolctl(timeout=3)
+        except EvalctlError as exc:
+            warnings.append({"code": exc.error["code"], "message": exc.error["message"], "requested_queue": "spoolctl"})
+            if run_mode == "fresh":
+                run_mode = "blocked"
+                for item in case_items:
+                    item["action"] = "blocked"
+                    item["reason"] = "spoolctl is unavailable or incompatible"
+                commands.append({"command": "evalctl doctor --component spoolctl --json", "rationale": "Diagnose spoolctl availability."})
+
+    will_run = len([item for item in case_items if item["action"] == "run"])
+    will_skip = len([item for item in case_items if item["action"] == "skip_terminal"])
+    blocked = len([item for item in case_items if item["action"] == "blocked"])
+    tracks = build_tracks(case_items, slots or jobs)
+    data = {
+        "suite": {"name": suite_name, "suite_dir": str(suite_dir), "case_count": len(cases)},
+        "run": {
+            "run_id": run_id,
+            "run_id_strategy": "explicit" if run_id else "generated_at_run_time",
+            "run_dir": run_dir_value,
+            "mode": run_mode,
+        },
+        "execution": {"mode": execution_mode, "jobs": jobs, "slots": slots, "timeout_seconds": timeout_seconds},
+        "dependency_graph": {"kind": "independent_cases", "edges": []},
+        "plan": {"summary": {"total_items": len(case_items), "will_run": will_run, "will_skip": will_skip, "blocked": blocked, "parallel_tracks": len(tracks)}, "tracks": tracks},
+        "cases": case_items,
+        "warnings": warnings,
+    }
+    return print_envelope(data, json_mode=json_mode, human=f"plan {suite_name}: {will_run} run, {will_skip} skip, {blocked} blocked", warnings=warnings, commands=commands, started=started)
+
+
 def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     resume_id = value_after(argv, "--resume")
     if resume_id is not None:
@@ -2682,6 +2852,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_validate(argv, json_mode, started)
         if cmd == "doctor":
             return command_doctor(argv, json_mode, started)
+        if cmd == "plan":
+            return command_plan(argv, json_mode, started)
         if cmd == "suite":
             if len(argv) > 1 and argv[1] == "add":
                 return command_suite_add(argv, json_mode, started)
