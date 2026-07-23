@@ -361,6 +361,10 @@ class EvalctlCliTests(unittest.TestCase):
             "        data['runnability'] = {'status': 'policy_blocked', 'runnable': False, 'exit_code': 5, 'reason': 'policy blocked route'}\n"
             "        data['runnability_status'] = 'policy_blocked'; data['runnable'] = False; data['summary'] = {'status': 'policy_blocked', 'message': 'policy blocked route'}\n"
             "        emit(data, 5)\n"
+            "    if PREFLIGHT_MODE == 'fallback':\n"
+            "        data['route_decision'] = dict(data['route_decision']); data['route_decision']['is_fallback'] = True\n"
+            "        data['route'] = dict(data['route']); data['route']['decision'] = data['route_decision']\n"
+            "        emit(data)\n"
             "    emit(data)\n"
             "if args and args[0] == 'route':\n"
             "    if ROUTE_MODE == 'nonzero-without-data': print('route failed', file=sys.stderr); raise SystemExit(3)\n"
@@ -382,11 +386,12 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:326d9c9bb79b9f6fbae21c6c5da2b21a7652af9a9bb74da7693e7d7b54ee2e4d")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:aa4c860b335417850a2c47ae15e92edf73e0d07a65a1b9060114f4545fdbcb0e")
             self.assertEqual(caps["tool_version"], "0.3.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
+            self.assertIn("inferctl_preflight_provenance", caps["data"]["features"])
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_COMMAND"]["exit"], 1)
             self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_SUBCOMMAND"]["surface"], "envelope")
@@ -395,6 +400,9 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(caps["data"]["error_codes"]["E_JOB_TRANSIENT"]["exit"], 4)
             self.assertEqual(caps["data"]["error_codes"]["E_INFERCTL_UNAVAILABLE"]["where"], ["doctor"])
             self.assertEqual(caps["data"]["error_codes"]["E_INFERCTL_INCOMPATIBLE"]["surface"], "envelope")
+            self.assertEqual(caps["data"]["error_codes"]["W_INFERCTL_ABSENT"]["surface"], "envelope")
+            self.assertEqual(caps["data"]["error_codes"]["W_INFERCTL_CAPTURE_FAILED"]["where"], ["run", "resume"])
+            self.assertEqual(caps["data"]["error_codes"]["W_INFERCTL_PREFLIGHT_BLOCKED"]["class"], "warning")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_FAILED"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_SCORER_CASE_FAILED"]["surface"], "score_json")
@@ -403,6 +411,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--resume", caps["data"]["verbs"]["run"]["flags"])
             self.assertIn("--queue", caps["data"]["verbs"]["run"]["flags"])
             self.assertIn("--slots", caps["data"]["verbs"]["run"]["flags"])
+            self.assertIn("--inferctl-task", caps["data"]["verbs"]["run"]["flags"])
             self.assertIn("--reservation-ttl", caps["data"]["verbs"]["run"]["flags"])
             self.assertEqual(caps["data"]["verbs"]["doctor"]["mega_command"], "DIAGNOSE")
             self.assertEqual(caps["data"]["verbs"]["doctor"]["exit_codes"], [0, 1])
@@ -447,6 +456,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("did_you_mean", docs.stdout)
             self.assertIn("doctor --json", docs.stdout)
             self.assertIn("plan code-review --json", docs.stdout)
+            self.assertIn("--inferctl-task TASK", docs.stdout)
             self.assertIn("run --resume", docs.stdout)
             self.assertIn("--queue spoolctl", docs.stdout)
 
@@ -645,6 +655,128 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIsInstance(real_data["verbs"], list)
             self.assertEqual({verb["name"] for verb in fake_data["verbs"]}, {verb["name"] for verb in fake_data["verbs"]} & {verb["name"] for verb in real_data["verbs"]})
             self.assertIn("preflight", {verb["name"] for verb in real_data["verbs"]})
+
+    def test_run_captures_inferctl_preflight_provenance_without_report_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            control = self.envelope(["run", "code-review", "--run-id", "control", "--json"], cwd, extra_env={"SOURCE_DATE_EPOCH": "1700000000"})
+            bindir = self.install_fake_inferctl(cwd)
+            env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""), "SOURCE_DATE_EPOCH": "1700000000"}
+            captured = self.envelope(["run", "code-review", "--run-id", "with-inferctl", "--inferctl-task", "code", "--json"], cwd, extra_env=env)
+            self.assertEqual(captured["data"]["report_hash"], control["data"]["report_hash"])
+            self.assertNotIn("W_INFERCTL_CAPTURE_FAILED", {warning["code"] for warning in captured["warnings"]})
+
+            run_dir = cwd / "evals" / "runs" / "with-inferctl"
+            manifest = json.loads((run_dir / "manifest.json").read_text())
+            run_inferctl = manifest["provenance"]["inferctl"]
+            self.assertEqual(run_inferctl["actual_mode"], "preflight")
+            self.assertEqual(run_inferctl["capture_modes"], ["preflight"])
+            self.assertTrue(run_inferctl["route_available"])
+            for case in manifest["cases"]:
+                inferctl = case["provenance"]["inferctl"]
+                self.assertTrue(inferctl["requested"])
+                self.assertEqual(inferctl["task"], "code")
+                self.assertEqual(inferctl["actual_mode"], "preflight")
+                self.assertEqual(inferctl["selected_backend"], "ollama")
+                self.assertEqual(inferctl["selected_model"], "qwen3:8b")
+                self.assertTrue(inferctl["runnable"])
+                self.assertTrue((run_dir / case["artifacts"]["inferctl_preflight"]).exists())
+                self.assertTrue((run_dir / case["artifacts"]["inferctl_provenance"]).exists())
+            self.assertFalse(list(run_dir.glob("cases/*/inferctl-route.json")))
+
+    def test_inferctl_absent_and_incompatible_are_best_effort(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            absent = self.envelope(["run", "code-review", "--run-id", "absent", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertTrue(absent["data"]["run"]["case_count"])
+            self.assertEqual([w["code"] for w in absent["warnings"]].count("W_INFERCTL_ABSENT"), 1)
+            absent_run = cwd / "evals" / "runs" / "absent"
+            absent_manifest = json.loads((absent_run / "manifest.json").read_text())
+            self.assertEqual(absent_manifest["provenance"]["inferctl"]["actual_mode"], "none")
+            self.assertFalse(list(absent_run.glob("cases/*/inferctl-*")))
+
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
+            incompatible = self.envelope(["run", "code-review", "--run-id", "incompatible", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual([w["code"] for w in incompatible["warnings"]].count("W_INFERCTL_INCOMPATIBLE"), 1)
+            incompatible_run = cwd / "evals" / "runs" / "incompatible"
+            self.assertEqual(json.loads((incompatible_run / "manifest.json").read_text())["provenance"]["inferctl"]["actual_mode"], "none")
+            self.assertFalse(list(incompatible_run.glob("cases/*/inferctl-*")))
+
+    def test_inferctl_preflight_blocked_fallback_and_capture_failure_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+
+            bindir = self.install_fake_inferctl(cwd, preflight_mode="policy-blocked")
+            blocked = self.envelope(["run", "code-review", "--run-id", "blocked", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertIn("W_INFERCTL_PREFLIGHT_BLOCKED", {warning["code"] for warning in blocked["warnings"]})
+            blocked_manifest = json.loads((cwd / "evals" / "runs" / "blocked" / "manifest.json").read_text())
+            self.assertFalse(blocked_manifest["cases"][0]["provenance"]["inferctl"]["runnable"])
+
+            bindir = self.install_fake_inferctl(cwd, preflight_mode="fallback")
+            fallback = self.envelope(["run", "code-review", "--run-id", "fallback", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertNotIn("W_INFERCTL_PREFLIGHT_BLOCKED", {warning["code"] for warning in fallback["warnings"]})
+            fallback_manifest = json.loads((cwd / "evals" / "runs" / "fallback" / "manifest.json").read_text())
+            self.assertTrue(fallback_manifest["cases"][0]["provenance"]["inferctl"]["fallback_selected"])
+
+            bindir = self.install_fake_inferctl(cwd, preflight_mode="invalid-json")
+            failed = self.envelope(["run", "code-review", "--run-id", "capture-failed", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual([w["code"] for w in failed["warnings"]].count("W_INFERCTL_CAPTURE_FAILED"), 1)
+            failed_run = cwd / "evals" / "runs" / "capture-failed"
+            self.assertTrue(list(failed_run.glob("cases/*/inferctl-error.json")))
+
+    def test_inferctl_provenance_queued_resume_and_replay_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = self.install_fake_inferctl(cwd)
+            spoolctl = self.install_fake_spoolctl(cwd)
+            env = {"PATH": str(bindir) + os.pathsep + str(spoolctl) + os.pathsep + os.environ.get("PATH", "")}
+
+            in_process = self.envelope(["run", "code-review", "--run-id", "infer-sync", "--inferctl-task", "code", "--json"], cwd, extra_env=env)
+            queued = self.envelope(["run", "code-review", "--run-id", "infer-queued", "--queue", "spoolctl", "--inferctl-task", "code", "--json"], cwd, extra_env=env)
+            self.assertEqual(queued["data"]["report_hash"], in_process["data"]["report_hash"])
+            queued_run = cwd / "evals" / "runs" / "infer-queued"
+            self.assertTrue(list(queued_run.glob("cases/*/inferctl-preflight.json")))
+
+            self.write_resume_runner(cwd)
+            log_path = cwd / "runner.log"
+            resume_env = dict(env)
+            resume_env.update({"RUN_LOG": str(log_path), "SLEEP_CASE": "cr-pass"})
+            proc_env = os.environ.copy()
+            proc_env.update(resume_env)
+            proc_env["PYTHONPATH"] = str(ROOT) + (os.pathsep + proc_env["PYTHONPATH"] if proc_env.get("PYTHONPATH") else "")
+            proc = subprocess.Popen(
+                CMD + ["run", "code-review", "--run-id", "infer-resume", "--jobs", "1", "--reservation-ttl", "1", "--inferctl-task", "code", "--json"],
+                cwd=cwd,
+                env=proc_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            first_marker = cwd / "evals" / "runs" / "infer-resume" / "cases" / "cr-fail" / "state.json"
+            deadline = time.time() + 10
+            while time.time() < deadline and not first_marker.exists():
+                time.sleep(0.05)
+            self.assertTrue(first_marker.exists(), "first case never reached terminal marker")
+            proc.terminate()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=5)
+            time.sleep(1.2)
+            resume = self.envelope(["run", "--resume", "infer-resume", "--reservation-ttl", "1", "--json"], cwd, extra_env=env)
+            self.assertTrue(resume["data"]["run"]["case_count"])
+            resume_manifest = json.loads((cwd / "evals" / "runs" / "infer-resume" / "manifest.json").read_text())
+            self.assertEqual([case["provenance"]["inferctl"]["actual_mode"] for case in resume_manifest["cases"]], ["preflight", "preflight"])
+
+            replay = self.envelope(["replay", "--failed", "infer-sync", "--run-id", "infer-replay", "--json"], cwd, extra_env=env)
+            self.assertEqual(replay["data"]["cases_replayed"], 1)
+            replay_run = cwd / "evals" / "runs" / "infer-replay"
+            self.assertFalse(list(replay_run.glob("cases/*/inferctl-*")))
 
     def test_init_validate_run_status_report_and_artifact_replay(self) -> None:
         with tempfile.TemporaryDirectory() as td:

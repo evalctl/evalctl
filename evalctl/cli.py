@@ -48,7 +48,7 @@ CODE_REGISTRY = {
     "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_COMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_SUBCOMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
-    "E_UNKNOWN_FLAG": {"class": "user-input", "exit": 1, "where": ["run", "replay", "jobs"], "retryable": False, "surface": "envelope"},
+    "E_UNKNOWN_FLAG": {"class": "user-input", "exit": 1, "where": ["run", "replay", "jobs", "plan", "doctor"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_COMPONENT": {"class": "user-input", "exit": 1, "where": ["doctor"], "retryable": False, "surface": "envelope"},
     "E_SCHEMA_VIOLATION": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
     "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False, "surface": "envelope"},
@@ -74,6 +74,10 @@ CODE_REGISTRY = {
     "W_PARTIAL_RUN": {"class": "warning", "where": ["run", "report"], "surface": "envelope"},
     "W_RESERVATION_RECLAIMED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
     "W_RESUME_NOTHING_PENDING": {"class": "warning", "where": ["resume"], "surface": "envelope"},
+    "W_INFERCTL_ABSENT": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
+    "W_INFERCTL_INCOMPATIBLE": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
+    "W_INFERCTL_CAPTURE_FAILED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
+    "W_INFERCTL_PREFLIGHT_BLOCKED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
 }
 
 VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report", "doctor", "plan"})
@@ -84,7 +88,7 @@ SUBCOMMANDS = {
     "scorer": frozenset({"add"}),
     "robot-docs": frozenset({"guide"}),
 }
-RUN_FLAGS_WITH_VALUES = {"--jobs", "--timeout", "--run-id", "--reservation-ttl", "--queue", "--slots"}
+RUN_FLAGS_WITH_VALUES = {"--jobs", "--timeout", "--run-id", "--reservation-ttl", "--queue", "--slots", "--inferctl-task"}
 RUN_BOOL_FLAGS = {"--json", "--no-color", "--fail-on-fail"}
 REPLAY_FLAGS_WITH_VALUES = {"--run-dir", "--run-id", "--suite", "--jobs", "--timeout"}
 REPLAY_BOOL_FLAGS = {"--json", "--no-color", "--failed", "--force", "--fail-on-fail"}
@@ -265,7 +269,7 @@ COMMANDS:
   validate [suite] [--json]        Validate suite files
   doctor [--component NAME] [--fast] [--json]
   plan <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--inferctl-task TASK] [--json]
-  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
+  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--inferctl-task TASK] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
   jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
   suite add <name> [--runner-argv ARGV|--runner-command CMD --shell] [--json]
@@ -302,7 +306,7 @@ def capabilities_data() -> dict[str, Any]:
         "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
         "doctor": {"description": "Diagnose evalctl runtime, run state, and optional integrations.", "json": True, "mutates": False, "flags": ["--json", "--component", "--fast"], "exit_codes": [0, 1], "mega_command": "DIAGNOSE"},
         "plan": {"description": "Produce a side-effect-free execution plan.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--inferctl-task"], "exit_codes": [0, 1], "mega_command": "PLAN"},
-        "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
+        "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--inferctl-task", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
         "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force", "--limit", "--cursor"], "exit_codes": [0, 1]},
         "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
         "suite": {"description": "Author suites, including suite add.", "json": True, "mutates": True, "args": ["add", "name"], "flags": ["--json", "--runner-argv", "--runner-command", "--shell"], "exit_codes": [0, 1, 5]},
@@ -314,7 +318,7 @@ def capabilities_data() -> dict[str, Any]:
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor", "plan"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor", "plan", "inferctl_preflight_provenance"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
@@ -329,7 +333,7 @@ def capabilities_data() -> dict[str, Any]:
         },
         "integrations": {
             "spoolctl": spoolctl_status,
-            "inferctl": {"available": False, "planned": True},
+            "inferctl": {"available": inferctl_binary() is not None, "planned": True},
         },
         "schemas_uri": "evalctl schema <verb> --json",
         "robot_docs_uri": "evalctl robot-docs guide",
@@ -538,7 +542,11 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 5. Run `evalctl plan <suite> --json` to inspect the resolved case set, run/skip
    actions, concurrency tracks, optional integration posture, and paste-ready
    follow-up commands without creating a run directory or executing runners.
-6. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
+6. Run `evalctl run <suite> --json`. Use `--inferctl-task TASK` when you want
+   best-effort inferctl preflight provenance captured before each runner executes.
+   Absence, incompatibility, preflight blocks, and capture failures are warnings;
+   runner execution and report scoring still proceed. evalctl v0.4 captures
+   preflight only and does not call `inferctl route`.
 7. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
    `run.json`, terminal `cases/<id>/state.json` markers, and the original suite snapshot;
    it skips terminal cases and re-runs only unfinished cases.
@@ -982,8 +990,9 @@ def score_summary(score: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str, Any]], *,
+                        provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+    entry = {
         "id": case["id"],
         "input_hash": sha256_text(stable_json(case)),
         "status": status,
@@ -999,6 +1008,18 @@ def case_manifest_entry(case: dict[str, Any], status: str, scores: list[dict[str
             "score": f"cases/{case['id']}/score.json",
         },
     }
+    if provenance is not None:
+        entry["provenance"] = provenance
+        artifacts = entry["artifacts"]
+        inferctl = provenance.get("inferctl") if isinstance(provenance, dict) else None
+        if isinstance(inferctl, dict):
+            if inferctl.get("preflight_artifact"):
+                artifacts["inferctl_preflight"] = inferctl["preflight_artifact"]
+            if inferctl.get("provenance_artifact"):
+                artifacts["inferctl_provenance"] = inferctl["provenance_artifact"]
+            if inferctl.get("error_artifact"):
+                artifacts["inferctl_error"] = inferctl["error_artifact"]
+    return entry
 
 
 TERMINAL_CASE_STATUSES = {"pass", "fail", "error", "canceled"}
@@ -1027,7 +1048,9 @@ def case_entry_from_artifacts(run_dir: Path, case_id: str) -> dict[str, Any]:
     case_dir = run_dir / "cases" / case_id
     case = read_json(case_dir / "input.json")
     score_doc = read_json(case_dir / "score.json")
-    return case_manifest_entry(case, score_doc["status"], score_doc["scores"])
+    provenance_path = case_dir / "inferctl-provenance.json"
+    provenance = {"inferctl": read_json(provenance_path)} if provenance_path.exists() else None
+    return case_manifest_entry(case, score_doc["status"], score_doc["scores"], provenance=provenance)
 
 
 def reservation_path(run_dir: Path) -> Path:
@@ -1134,6 +1157,157 @@ def clean_pending_case_dirs(run_dir: Path, pending_cases: list[dict[str, Any]]) 
         shutil.rmtree(run_dir / "cases" / case["id"], ignore_errors=True)
 
 
+def dedupe_warnings(warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for warning in warnings:
+        key = stable_json(warning)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(warning)
+    return out
+
+
+def inferctl_run_context(task: str | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if task is None:
+        return {"requested": False, "task": None, "actual_mode": "none", "capture_modes": []}, []
+    warnings: list[dict[str, Any]] = []
+    base: dict[str, Any] = {"requested": True, "task": task, "actual_mode": "none", "capture_modes": []}
+    try:
+        capabilities = inferctl_capabilities(timeout=3)
+        verbs = inferctl_verb_names(capabilities)
+    except EvalctlError as exc:
+        code = "W_INFERCTL_ABSENT" if exc.error["code"] == "E_INFERCTL_UNAVAILABLE" else "W_INFERCTL_INCOMPATIBLE"
+        warnings.append({"code": code, "message": exc.error["message"]})
+        return {**base, "available": False}, warnings
+    if "preflight" not in verbs:
+        warnings.append({"code": "W_INFERCTL_INCOMPATIBLE", "message": "inferctl is present but lacks preflight support"})
+        return {**base, "available": True, "contract_version": capabilities.get("contract_version"), "verbs": sorted(verbs)}, warnings
+    return {
+        **base,
+        "available": True,
+        "actual_mode": "preflight",
+        "capture_modes": ["preflight"],
+        "contract_version": capabilities.get("contract_version"),
+        "verbs": sorted(verbs),
+        "route_available": "route" in verbs,
+    }, warnings
+
+
+def inferctl_payload_data(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("ok") is False:
+        return payload.get("data") if isinstance(payload.get("data"), dict) else None
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return data
+    return payload
+
+
+def inferctl_warning_codes(data: dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    for item in data.get("warnings", []):
+        if isinstance(item, dict) and item.get("code"):
+            codes.append(str(item["code"]))
+        elif isinstance(item, str):
+            codes.append(item)
+    return codes
+
+
+def inferctl_error_codes(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    codes: list[str] = []
+    for item in payload.get("errors", []):
+        if isinstance(item, dict) and item.get("code"):
+            codes.append(str(item["code"]))
+    return codes
+
+
+def inferctl_preflight_summary(payload: Any, returncode: int) -> tuple[dict[str, Any], bool]:
+    data = inferctl_payload_data(payload) or {}
+    runnability = data.get("runnability") if isinstance(data.get("runnability"), dict) else {}
+    route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    decision = data.get("route_decision")
+    if not isinstance(decision, dict):
+        decision = route.get("decision") if isinstance(route.get("decision"), dict) else {}
+    runnable = data.get("runnable", runnability.get("runnable"))
+    status = data.get("runnability_status", runnability.get("status"))
+    blocked = runnable is False or (status is not None and status not in {"runnable", "ready"})
+    summary = {
+        "returncode": returncode,
+        "runnable": runnable,
+        "runnability_status": status,
+        "ready": decision.get("ready"),
+        "selected_backend": decision.get("selected_backend"),
+        "selected_model": decision.get("selected_model"),
+        "fallback_selected": decision.get("is_fallback"),
+        "warning_codes": inferctl_warning_codes(data),
+        "error_codes": inferctl_error_codes(payload),
+    }
+    return summary, blocked
+
+
+def capture_inferctl_preflight(prepared: dict[str, Any], inferctl_context: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if not inferctl_context.get("requested"):
+        return None, []
+    case_dir = prepared["case_dir"]
+    case_rel = f"cases/{prepared['case']['id']}"
+    provenance: dict[str, Any] = {
+        "requested": True,
+        "task": inferctl_context.get("task"),
+        "actual_mode": inferctl_context.get("actual_mode", "none"),
+        "capture_modes": inferctl_context.get("capture_modes", []),
+        "available": inferctl_context.get("available", False),
+    }
+    if inferctl_context.get("actual_mode") != "preflight":
+        return provenance, []
+
+    binary = inferctl_binary()
+    if binary is None:
+        provenance["actual_mode"] = "none"
+        write_json(case_dir / "inferctl-provenance.json", provenance)
+        provenance["provenance_artifact"] = f"{case_rel}/inferctl-provenance.json"
+        write_json(case_dir / "inferctl-provenance.json", provenance)
+        return provenance, [{"code": "W_INFERCTL_ABSENT", "message": "inferctl is not available on PATH"}]
+
+    args = [binary, "preflight", str(inferctl_context["task"]), "--prompt-file", str(prepared["task_txt"]), "--allow-fallback", "--json"]
+    started = time.time()
+    try:
+        result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        duration_ms = int((time.time() - started) * 1000)
+        payload = json.loads(result.stdout)
+        write_json(case_dir / "inferctl-preflight.json", payload)
+        summary, blocked = inferctl_preflight_summary(payload, result.returncode)
+        provenance.update(summary)
+        provenance.update({
+            "preflight_artifact": f"{case_rel}/inferctl-preflight.json",
+            "provenance_artifact": f"{case_rel}/inferctl-provenance.json",
+            "duration_ms": duration_ms,
+        })
+        warnings = [{"code": "W_INFERCTL_PREFLIGHT_BLOCKED", "message": "inferctl preflight reported the case is not runnable"}] if blocked else []
+    except subprocess.TimeoutExpired as exc:
+        error = {"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight timed out", "timeout_seconds": 10, "stdout": decode_subprocess_output(exc.stdout), "stderr": decode_subprocess_output(exc.stderr)}
+        write_json(case_dir / "inferctl-error.json", error)
+        provenance.update({"error_code": error["code"], "error_artifact": f"{case_rel}/inferctl-error.json", "provenance_artifact": f"{case_rel}/inferctl-provenance.json"})
+        warnings = [{"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight capture failed"}]
+    except (OSError, json.JSONDecodeError) as exc:
+        error = {"code": "W_INFERCTL_CAPTURE_FAILED", "message": f"inferctl preflight capture failed: {exc}"}
+        write_json(case_dir / "inferctl-error.json", error)
+        provenance.update({"error_code": error["code"], "error_artifact": f"{case_rel}/inferctl-error.json", "provenance_artifact": f"{case_rel}/inferctl-provenance.json"})
+        warnings = [{"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight capture failed"}]
+    except Exception as exc:
+        error = {"code": "W_INFERCTL_CAPTURE_FAILED", "message": f"unexpected inferctl preflight capture failure: {exc}"}
+        write_json(case_dir / "inferctl-error.json", error)
+        provenance.update({"error_code": error["code"], "error_artifact": f"{case_rel}/inferctl-error.json", "provenance_artifact": f"{case_rel}/inferctl-provenance.json"})
+        warnings = [{"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight capture failed"}]
+
+    write_json(case_dir / "inferctl-provenance.json", provenance)
+    return provenance, warnings
+
+
 def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, exc: BaseException) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     warnings: list[dict[str, Any]] = []
     case_dir = run_dir / "cases" / case["id"]
@@ -1171,7 +1345,9 @@ def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str
     score_doc = {"case_id": case["id"], "status": "error", "ok": False, "scores": scores}
     write_json(case_dir / "score.json", score_doc)
     write_terminal_marker(case_dir, case["id"], "error")
-    return case_manifest_entry(case, "error", scores), warnings
+    provenance_path = case_dir / "inferctl-provenance.json"
+    provenance = {"inferctl": read_json(provenance_path)} if provenance_path.exists() else None
+    return case_manifest_entry(case, "error", scores, provenance=provenance), warnings
 
 
 def prepare_case_workspace(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path,
@@ -1339,7 +1515,9 @@ def capture_workspace_after_and_score(prepared: dict[str, Any], output_text: str
         status = "fail"
     score_doc = {"case_id": case["id"], "status": status, "ok": status == "pass", "scores": scores}
     write_json(case_dir / "score.json", score_doc)
-    return case_manifest_entry(case, status, scores), warnings
+    provenance_path = case_dir / "inferctl-provenance.json"
+    provenance = {"inferctl": read_json(provenance_path)} if provenance_path.exists() else None
+    return case_manifest_entry(case, status, scores, provenance=provenance), warnings
 
 
 def spoolctl_runner_command(prepared: dict[str, Any]) -> list[str]:
@@ -1414,13 +1592,18 @@ def runner_result_from_spoolctl_attempt(attempt: dict[str, Any], max_bytes: int)
 
 def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_cases: list[dict[str, Any]], pending_cases: list[dict[str, Any]],
                                    completed_entries: dict[str, dict[str, Any]], run_dir: Path, run_id: str,
-                                   jobs: int, timeout_override: int | None, slots: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                                   jobs: int, timeout_override: int | None, slots: int,
+                                   inferctl_context: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     db_path = run_dir / ".spoolctl.db"
     clean_pending_case_dirs(run_dir, pending_cases)
     prepared_by_case: dict[str, dict[str, Any]] = {}
     job_ids: list[str] = []
+    warnings: list[dict[str, Any]] = []
     for case in sorted(pending_cases, key=lambda c: c["id"]):
         prepared = prepare_case_workspace(suite_dir, suite, case, run_dir, timeout_override)
+        if inferctl_context is not None:
+            _, capture_warnings = capture_inferctl_preflight(prepared, inferctl_context)
+            warnings.extend(capture_warnings)
         prepared_by_case[case["id"]] = prepared
         job_ids.append(spoolctl_add_case(db_path, run_id, prepared))
     worker = subprocess.Popen([spoolctl_binary(), "work", "--db", str(db_path), "--queue", "evalctl", "--slots", str(slots), "--drain"],
@@ -1431,7 +1614,6 @@ def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_c
         raise EvalctlError("E_JOB_TRANSIENT", "spoolctl worker reported a transient failure", "retry the queued run or resume it later", 4)
     if worker.returncode not in {0, None}:
         raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl worker failed: {worker_stderr or worker_stdout}", "inspect spoolctl worker output", 3)
-    warnings: list[dict[str, Any]] = []
     entries_by_id = dict(completed_entries)
     for case in sorted(pending_cases, key=lambda c: c["id"]):
         prepared = prepared_by_case[case["id"]]
@@ -1451,9 +1633,13 @@ def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_c
     return case_entries, warnings
 
 
-def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, timeout_override: int | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def run_case(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, timeout_override: int | None,
+             inferctl_context: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     prepared = prepare_case_workspace(suite_dir, suite, case, run_dir, timeout_override)
     all_warnings = list(prepared["warnings"])
+    if inferctl_context is not None:
+        _, warnings = capture_inferctl_preflight(prepared, inferctl_context)
+        all_warnings.extend(warnings)
     runner_result = execute_runner_in_process(prepared)
     output_text, runner_json, warnings = normalize_runner_artifacts(prepared, runner_result)
     all_warnings.extend(warnings)
@@ -1927,8 +2113,9 @@ def timeout_seconds_for_run(suite: dict[str, Any], timeout_override: int | None)
 
 def build_run_metadata(suite: dict[str, Any], suite_dir: Path, cases: list[dict[str, Any]], run_id: str,
                        jobs: int, timeout_override: int | None, replayed_from: str | None,
-                       queue: dict[str, Any] | None = None, mode: str = "synchronous") -> dict[str, Any]:
-    return {
+                       queue: dict[str, Any] | None = None, mode: str = "synchronous",
+                       provenance: dict[str, Any] | None = None) -> dict[str, Any]:
+    metadata = {
         "schema_version": 1,
         "run_id": run_id,
         "created_ts": now_iso(),
@@ -1937,6 +2124,9 @@ def build_run_metadata(suite: dict[str, Any], suite_dir: Path, cases: list[dict[
         "replayed_from": replayed_from,
         "queue": queue,
     }
+    if provenance is not None:
+        metadata["provenance"] = provenance
+    return metadata
 
 
 def write_run_metadata_once(run_dir: Path, metadata: dict[str, Any]) -> None:
@@ -1959,6 +2149,8 @@ def manifest_from_run_metadata(metadata: dict[str, Any], case_entries: list[dict
     }
     if metadata.get("queue") is not None:
         manifest_doc["queue"] = metadata["queue"]
+    if metadata.get("provenance") is not None:
+        manifest_doc["provenance"] = metadata["provenance"]
     return manifest_doc
 
 
@@ -2006,12 +2198,13 @@ def finalize_run(run_dir: Path, metadata: dict[str, Any], case_entries: list[dic
 
 def execute_pending_cases(suite_dir: Path, suite: dict[str, Any], all_cases: list[dict[str, Any]], pending_cases: list[dict[str, Any]],
                           completed_entries: dict[str, dict[str, Any]], run_dir: Path, jobs: int,
-                          timeout_override: int | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                          timeout_override: int | None,
+                          inferctl_context: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     all_warnings: list[dict[str, Any]] = []
     case_results: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     clean_pending_case_dirs(run_dir, pending_cases)
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
-        future_to_case = {executor.submit(run_case, suite_dir, suite, case, run_dir, timeout_override): case for case in sorted(pending_cases, key=lambda c: c["id"])}
+        future_to_case = {executor.submit(run_case, suite_dir, suite, case, run_dir, timeout_override, inferctl_context): case for case in sorted(pending_cases, key=lambda c: c["id"])}
         for future in concurrent.futures.as_completed(future_to_case):
             case = future_to_case[future]
             try:
@@ -2039,24 +2232,28 @@ def execute_pending_cases(suite_dir: Path, suite: dict[str, Any], all_cases: lis
 def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, Any]], run_dir: Path, run_id: str,
                   jobs: int, timeout_override: int | None, replayed_from: str | None,
                   reservation_ttl: int = DEFAULT_RESERVATION_TTL_SECONDS,
-                  queue_backend: str | None = None, slots: int | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+                  queue_backend: str | None = None, slots: int | None = None,
+                  inferctl_task: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
     queue = {"backend": "spoolctl", "db": ".spoolctl.db", "jobs": {}} if queue_backend == "spoolctl" else None
-    metadata = build_run_metadata(suite, suite_dir, cases, run_id, slots or jobs, timeout_override, replayed_from, queue=queue, mode="queued" if queue_backend == "spoolctl" else "synchronous")
-    write_run_metadata_once(run_dir, metadata)
     all_warnings = [{"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}]
+    inferctl_context, inferctl_warnings = inferctl_run_context(inferctl_task)
+    all_warnings.extend(inferctl_warnings)
+    metadata = build_run_metadata(suite, suite_dir, cases, run_id, slots or jobs, timeout_override, replayed_from, queue=queue, mode="queued" if queue_backend == "spoolctl" else "synchronous",
+                                  provenance={"inferctl": inferctl_context} if inferctl_context.get("requested") else None)
+    write_run_metadata_once(run_dir, metadata)
     with ReservationHeartbeat(run_dir, run_id, reservation_ttl):
         if queue_backend == "spoolctl":
-            case_entries, run_warnings = execute_spoolctl_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, run_id, jobs, timeout_override, slots or jobs)
+            case_entries, run_warnings = execute_spoolctl_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, run_id, jobs, timeout_override, slots or jobs, inferctl_context)
         else:
-            case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, jobs, timeout_override)
+            case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, cases, {}, run_dir, jobs, timeout_override, inferctl_context)
         all_warnings.extend(run_warnings)
         if any(c["status"] == "error" for c in case_entries):
             all_warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
         data, run_ok = finalize_run(run_dir, metadata, case_entries)
         clear_reservation(run_dir)
-    return data, all_warnings, run_ok
+    return data, dedupe_warnings(all_warnings), run_ok
 
 
 def plan_case_entry(case: dict[str, Any], action_name: str, reason: str, suite: dict[str, Any], *, inferctl_task: str | None = None) -> dict[str, Any]:
@@ -2227,6 +2424,9 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
         raise EvalctlError("E_CASE_INVALID", f"unsupported queue backend: {queue_backend}", "supported value: --queue spoolctl", 1)
     if queue_backend == "spoolctl":
         probe_spoolctl()
+    inferctl_task = value_after(argv, "--inferctl-task")
+    if inferctl_task is not None and not is_safe_id(inferctl_task):
+        raise EvalctlError("E_CASE_INVALID", f"unsafe inferctl task: {inferctl_task!r}", "use letters, digits, '.', '_' or '-'", 1)
     suite_dir = resolve_suite(args[1])
     validate_suite(suite_dir)
     suite = read_json(suite_dir / "suite.json")
@@ -2256,7 +2456,7 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
             raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
         raise EvalctlError("E_RUN_BUSY", f"run {run_id} is incomplete and may be resumable", f"retry with: evalctl run --resume {run_id} --json", 4)
     timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
-    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots)
+    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots, inferctl_task)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
     return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
@@ -2293,14 +2493,15 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
     jobs = int(metadata["execution"]["jobs"])
     timeout_override = int(metadata["execution"]["timeout_seconds"])
     queued = metadata["execution"].get("mode") == "queued" and metadata.get("queue", {}).get("backend") == "spoolctl"
+    inferctl_context = metadata.get("provenance", {}).get("inferctl") if isinstance(metadata.get("provenance"), dict) else None
     if queued:
         probe_spoolctl()
     with ReservationHeartbeat(run_dir, run_id, reservation_ttl):
         if pending_cases:
             if queued:
-                case_entries, run_warnings = execute_spoolctl_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, run_id, jobs, timeout_override, jobs)
+                case_entries, run_warnings = execute_spoolctl_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, run_id, jobs, timeout_override, jobs, inferctl_context)
             else:
-                case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, jobs, timeout_override)
+                case_entries, run_warnings = execute_pending_cases(suite_dir, suite, cases, pending_cases, completed_entries, run_dir, jobs, timeout_override, inferctl_context)
             warnings.extend(run_warnings)
         else:
             case_entries = [completed_entries[case["id"]] for case in sorted(cases, key=lambda c: c["id"])]
@@ -2310,7 +2511,7 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
         data, run_ok = finalize_run(run_dir, metadata, case_entries)
         clear_reservation(run_dir)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
-    print_envelope(data, json_mode=json_mode, human=f"Resume {run_id}: {'pass' if run_ok else 'fail'}", warnings=warnings, commands=commands, started=started)
+    print_envelope(data, json_mode=json_mode, human=f"Resume {run_id}: {'pass' if run_ok else 'fail'}", warnings=dedupe_warnings(warnings), commands=commands, started=started)
     return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
 
 
