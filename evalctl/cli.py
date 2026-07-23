@@ -49,6 +49,7 @@ CODE_REGISTRY = {
     "E_UNKNOWN_COMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_SUBCOMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_FLAG": {"class": "user-input", "exit": 1, "where": ["run", "replay", "jobs"], "retryable": False, "surface": "envelope"},
+    "E_UNKNOWN_COMPONENT": {"class": "user-input", "exit": 1, "where": ["doctor"], "retryable": False, "surface": "envelope"},
     "E_SCHEMA_VIOLATION": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
     "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False, "surface": "envelope"},
     "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report", "resume"], "retryable": False, "surface": "envelope"},
@@ -57,6 +58,8 @@ CODE_REGISTRY = {
     "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_SPOOLCTL_UNAVAILABLE": {"class": "tool-env", "exit": 3, "where": ["run", "resume"], "retryable": False, "surface": "envelope"},
     "E_SPOOLCTL_INCOMPATIBLE": {"class": "tool-env", "exit": 3, "where": ["run", "resume"], "retryable": False, "surface": "envelope"},
+    "E_INFERCTL_UNAVAILABLE": {"class": "tool-env", "exit": 3, "where": ["doctor"], "retryable": False, "surface": "envelope"},
+    "E_INFERCTL_INCOMPATIBLE": {"class": "tool-env", "exit": 3, "where": ["doctor"], "retryable": False, "surface": "envelope"},
     "E_JOB_TRANSIENT": {"class": "transient", "exit": 4, "where": ["run", "resume"], "retryable": True, "surface": "envelope"},
     "E_SCORER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run", "report"], "retryable": None, "surface": "envelope"},
     "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
@@ -73,7 +76,7 @@ CODE_REGISTRY = {
     "W_RESUME_NOTHING_PENDING": {"class": "warning", "where": ["resume"], "surface": "envelope"},
 }
 
-VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"})
+VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report", "doctor"})
 SUBCOMMANDS = {
     "jobs": frozenset({"list", "get", "prune"}),
     "suite": frozenset({"add"}),
@@ -87,6 +90,10 @@ REPLAY_FLAGS_WITH_VALUES = {"--run-dir", "--run-id", "--suite", "--jobs", "--tim
 REPLAY_BOOL_FLAGS = {"--json", "--no-color", "--failed", "--force", "--fail-on-fail"}
 JOBS_FLAGS_WITH_VALUES = {"--limit", "--cursor"}
 JOBS_BOOL_FLAGS = {"--json", "--no-color", "--yes", "--force"}
+DOCTOR_FLAGS_WITH_VALUES = {"--component"}
+DOCTOR_BOOL_FLAGS = {"--json", "--no-color", "--fast"}
+DOCTOR_COMPONENTS = frozenset({"runtime", "suite_root", "runs_root", "reservations", "spoolctl", "inferctl", "runner_safety"})
+OPTIONAL_COMPONENT_STATES = {"not_configured", "unknown"}
 
 
 class EvalctlError(Exception):
@@ -254,6 +261,7 @@ COMMANDS:
   robot-docs guide                 Agent workflow handbook
   init [--force]                   Scaffold evals/ with code-review suite
   validate [suite] [--json]        Validate suite files
+  doctor [--component NAME] [--fast] [--json]
   run <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
   jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
@@ -289,6 +297,7 @@ def capabilities_data() -> dict[str, Any]:
         "robot-docs": {"description": "Return agent workflow guide.", "json": False, "mutates": False, "args": ["guide"], "exit_codes": [0, 1]},
         "init": {"description": "Scaffold evals/ tree with sample code-review suite.", "json": True, "mutates": True, "flags": ["--json", "--force"], "exit_codes": [0, 5]},
         "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
+        "doctor": {"description": "Diagnose evalctl runtime, run state, and optional integrations.", "json": True, "mutates": False, "flags": ["--json", "--component", "--fast"], "exit_codes": [0, 1], "mega_command": "DIAGNOSE"},
         "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
         "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force", "--limit", "--cursor"], "exit_codes": [0, 1]},
         "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
@@ -301,7 +310,7 @@ def capabilities_data() -> dict[str, Any]:
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
@@ -368,6 +377,15 @@ DATA_SCHEMAS = {
     "validate": schema_object(
         ["suite", "case_count", "valid"],
         {"suite": {"type": "string"}, "case_count": {"type": "integer", "minimum": 0}, "valid": {"type": "boolean"}},
+    ),
+    "doctor": schema_object(
+        ["operation_outcome", "components", "recommended_action", "fallbacks_active"],
+        {
+            "operation_outcome": schema_object(["kind", "health_kind"], {"kind": {"type": "string"}, "health_kind": {"type": "string"}}),
+            "components": {"type": "object", "additionalProperties": {"type": "object"}},
+            "recommended_action": schema_object(["command", "rationale", "is_destructive", "alternatives"], {"command": {"type": "string"}, "rationale": {"type": "string"}, "is_destructive": {"type": "boolean"}, "alternatives": {"type": "array"}}),
+            "fallbacks_active": {"type": "array", "items": {"type": "object"}},
+        },
     ),
     "run": schema_object(
         ["run_id", "run_dir", "run", "report_hash"],
@@ -483,6 +501,7 @@ Capabilities: `evalctl capabilities --json`
 Schemas: `evalctl schema run --json`
 Initialize: `evalctl init --json`
 Validate: `evalctl validate code-review --json`
+Diagnose: `evalctl doctor --json`
 Run: `evalctl run code-review --json`
 Inspect: `evalctl status <run-id> --json`
 Report: `evalctl report <run-id> --format json`
@@ -496,26 +515,29 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
    create fixtures; `evalctl case add demo --task "..." --workspace fixtures/x --json`;
    `evalctl scorer add demo --name exact --required --json`.
 3. Run `evalctl validate <suite> --json` before executing local code.
-4. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
-5. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
+4. Run `evalctl doctor --json` when local run state, optional integrations, or
+   runtime health are unclear. Doctor exits 0 when it successfully diagnoses
+   degraded components; malformed diagnostic input exits 1.
+5. Run `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is not a sandbox.
+6. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
    `run.json`, terminal `cases/<id>/state.json` markers, and the original suite snapshot;
    it skips terminal cases and re-runs only unfinished cases.
-6. Use `jobs list --limit 50 --json` to inspect completed, running, stale, and
+7. Use `jobs list --limit 50 --json` to inspect completed, running, stale, and
    orphaned local run state. List output is bounded by default and returns
    `meta.pagination.next_cursor` plus a next-page command when more runs exist.
    Use `jobs get <run-id> --json` and `jobs prune --json` for single-run inspection
    and cleanup. Reservations are TTL files with a background heartbeat; no daemon or
    lock server is required.
-7. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
+8. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
    execution to spoolctl. Spoolctl is optional and must be >= 0.4.1; absent or incompatible
    spoolctl is a hard error only when `--queue spoolctl` is requested. The queue DB is
    per-run `.spoolctl.db`, so externally managed cross-machine workers require a shared
    filesystem and are not a general hosted-worker mode.
-8. Use `status` for run state and recommended next command.
-9. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
-10. Copy a completed run directory anywhere and run `report --run-dir <path> --format json`;
+9. Use `status` for run state and recommended next command.
+10. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
+11. Copy a completed run directory anywhere and run `report --run-dir <path> --format json`;
    evalctl recomputes scores from report artifacts and does not require durability sidecars.
-11. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
+12. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
    to re-execute only failed/errored cases into a fresh partial run. `replay --run-id`
    names the destination run, not the source.
 
@@ -823,10 +845,15 @@ def spoolctl_binary() -> str:
     return path
 
 
-def run_spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None) -> tuple[int, Any]:
+def run_spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None, timeout: float | None = None) -> tuple[int, Any]:
     allow_exit_codes = allow_exit_codes or {0}
     try:
-        result = subprocess.run([spoolctl_binary(), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run([spoolctl_binary(), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace")
+        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
+        detail = (stderr or stdout or "timed out").strip()
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl operation timed out: {detail}", "upgrade, restart, or bypass spoolctl", 3, timeout_seconds=timeout)
     except OSError as exc:
         raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", f"could not run spoolctl: {exc}", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
     if result.returncode == 4:
@@ -840,8 +867,8 @@ def run_spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = No
     return result.returncode, payload
 
 
-def spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None) -> dict[str, Any]:
-    returncode, payload = run_spoolctl_json(args, allow_exit_codes=allow_exit_codes)
+def spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None, timeout: float | None = None) -> dict[str, Any]:
+    returncode, payload = run_spoolctl_json(args, allow_exit_codes=allow_exit_codes, timeout=timeout)
     if isinstance(payload, dict) and "ok" in payload:
         if not payload.get("ok") and returncode != 6:
             raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl returned an error envelope", "inspect spoolctl output or drop --queue spoolctl", 3)
@@ -864,8 +891,8 @@ def spoolctl_flag_names(flags: Any) -> set[str]:
     return names
 
 
-def probe_spoolctl() -> dict[str, Any]:
-    _, payload = run_spoolctl_json(["capabilities", "--json"])
+def probe_spoolctl(*, timeout: float | None = None) -> dict[str, Any]:
+    _, payload = run_spoolctl_json(["capabilities", "--json"], timeout=timeout)
     if not isinstance(payload, dict):
         raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities output must be a JSON object", "upgrade spoolctl to >= 0.4.1", 3)
     is_envelope = "ok" in payload
@@ -1330,7 +1357,7 @@ def spoolctl_add_case(db_path: Path, run_id: str, prepared: dict[str, Any]) -> s
         args.extend(["--env", f"{key}={value}"])
     args.append("--")
     args.extend(spoolctl_runner_command(prepared))
-    data = spoolctl_json(args)
+    data = spoolctl_json(args, timeout=3)
     job_id = str(data.get("job_id") or data.get("id") or "")
     if not job_id:
         raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl add did not return data.job_id", "upgrade spoolctl to >= 0.4.1", 3)
@@ -1389,7 +1416,7 @@ def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_c
     for case in sorted(pending_cases, key=lambda c: c["id"]):
         prepared = prepared_by_case[case["id"]]
         job_doc = read_json(prepared["case_dir"] / "job.json")
-        detail = spoolctl_json(["show", "--db", str(db_path), "--json", job_doc["job_id"]])
+        detail = spoolctl_json(["show", "--db", str(db_path), "--json", job_doc["job_id"]], timeout=3)
         attempt = latest_terminal_attempt(detail)
         runner_result = runner_result_from_spoolctl_attempt(attempt, prepared["max_bytes"])
         output_text, runner_json, normalize_warnings = normalize_runner_artifacts(prepared, runner_result)
@@ -2180,6 +2207,210 @@ def classify_run_dir(run_dir: Path) -> dict[str, Any]:
     return data
 
 
+def action(command: str, rationale: str, *, is_destructive: bool = False, alternatives: list[Any] | None = None) -> dict[str, Any]:
+    return {"command": command, "rationale": rationale, "is_destructive": is_destructive, "alternatives": alternatives or []}
+
+
+def component(state: str, details: str, **extra: Any) -> dict[str, Any]:
+    data = {"state": state, "details": details}
+    data.update({k: v for k, v in extra.items() if v is not None})
+    return data
+
+
+def runs_with_queue_state(run_dirs: list[Path]) -> list[Path]:
+    return [path for path in run_dirs if (path / ".spoolctl.db").exists() or any((path / "cases").glob("*/job.json"))]
+
+
+def runs_with_inferctl_state(run_dirs: list[Path]) -> list[Path]:
+    return [path for path in run_dirs if any((path / "cases").glob("*/inferctl-provenance.json"))]
+
+
+def inferctl_binary() -> str | None:
+    return shutil.which("inferctl")
+
+
+def inferctl_capabilities(*, timeout: float | None = 3) -> dict[str, Any]:
+    binary = inferctl_binary()
+    if binary is None:
+        raise EvalctlError("E_INFERCTL_UNAVAILABLE", "inferctl is not available on PATH", "install inferctl or omit inferctl provenance", 3)
+    try:
+        result = subprocess.run([binary, "capabilities", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl capabilities timed out", "run evalctl doctor --fast or inspect inferctl separately", 3, timeout_seconds=timeout) from exc
+    except OSError as exc:
+        raise EvalctlError("E_INFERCTL_UNAVAILABLE", f"could not run inferctl: {exc}", "install inferctl or omit inferctl provenance", 3) from exc
+    if result.returncode not in {0, 1, 3, 4, 5}:
+        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", f"inferctl capabilities failed: {result.stderr.strip() or result.stdout.strip()}", "inspect inferctl capabilities --json", 3)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", f"inferctl returned invalid JSON: {exc.msg}", "inspect inferctl capabilities --json", 3) from exc
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl returned an error envelope", "inspect inferctl capabilities --json", 3)
+    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl capabilities data must be an object", "upgrade inferctl or omit inferctl provenance", 3)
+    return data
+
+
+def inferctl_verb_names(data: dict[str, Any]) -> set[str]:
+    verbs = data.get("verbs", [])
+    if not isinstance(verbs, list):
+        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl capabilities verbs must be a list", "upgrade inferctl or omit inferctl provenance", 3)
+    names = {item.get("name") for item in verbs if isinstance(item, dict)}
+    return {name for name in names if isinstance(name, str)}
+
+
+def probe_runtime() -> dict[str, Any]:
+    ok = sys.version_info >= (3, 11)
+    return component(
+        "healthy" if ok else "degraded",
+        f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}; evalctl {__version__}",
+        observed={"python": sys.version.split()[0], "evalctl_version": __version__, "cwd_readable": os.access(Path.cwd(), os.R_OK)},
+        recommended_action=None if ok else action("python3.11 -m evalctl doctor --json", "Use Python 3.11 or newer."),
+    )
+
+
+def probe_suite_root() -> dict[str, Any]:
+    evals = Path("evals")
+    default_suite = evals / "suites" / "code-review"
+    if not evals.exists():
+        return component("degraded", "evals/ is not initialized", recommended_action=action("evalctl init --json", "Initialize the default evalctl suite."))
+    if not default_suite.exists():
+        return component("degraded", "default code-review suite is absent", recommended_action=action("evalctl init --json", "Create or restore the default suite."))
+    try:
+        validate_suite(default_suite)
+    except EvalctlError as exc:
+        return component("unhealthy", "default suite is invalid", errors=[exc.error], recommended_action=action("evalctl validate code-review --json", "Inspect suite validation errors."))
+    return component("healthy", "default suite is present and valid", observed={"suite": "code-review"})
+
+
+def probe_runs_root() -> dict[str, Any]:
+    root = runs_root()
+    if not root.exists():
+        return component("not_configured", "no runs directory exists yet", observed={"runs_root": str(root)})
+    readable = os.access(root, os.R_OK)
+    writable = os.access(root, os.W_OK)
+    if not (readable and writable):
+        return component("unhealthy", "runs directory is not readable and writable", observed={"readable": readable, "writable": writable})
+    return component("healthy", "runs directory is readable and writable", observed={"runs_root": str(root)})
+
+
+def probe_reservations(run_dirs: list[Path]) -> dict[str, Any]:
+    classified = [classify_run_dir(path) for path in run_dirs]
+    stale = [item["run_id"] for item in classified if item["state"] == "stale"]
+    live = [item["run_id"] for item in classified if item["state"] == "running"]
+    if stale:
+        recommended = action("evalctl jobs prune --json", "Remove stale reservations and orphaned run directories.")
+        if len(stale) == 1:
+            recommended["alternatives"] = [f"evalctl run --resume {stale[0]} --json"]
+        return component("degraded", "stale reservations are present", observed={"stale": stale, "live": live}, recommended_action=recommended)
+    return component("healthy", "no stale reservations found", observed={"live": live})
+
+
+def probe_spoolctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, Any]:
+    queued = [path.name for path in runs_with_queue_state(run_dirs)]
+    binary = shutil.which("spoolctl")
+    if fast:
+        state = "unknown" if binary else ("degraded" if queued else "not_configured")
+        return component(state, "fast mode used PATH-only spoolctl check", observed={"binary": binary, "queued_runs": queued})
+    if binary is None:
+        state = "degraded" if queued else "not_configured"
+        recommended = action("install spoolctl >= 0.4.1 or run without --queue spoolctl", "Queued state exists but spoolctl is absent.") if queued else None
+        return component(state, "spoolctl is not available on PATH", observed={"queued_runs": queued}, recommended_action=recommended)
+    try:
+        data = probe_spoolctl(timeout=3)
+        return component("healthy", "spoolctl is compatible", observed={"version": data.get("version") or data.get("tool_version"), "queued_runs": queued})
+    except EvalctlError as exc:
+        state = "unhealthy" if queued else "degraded"
+        return component(state, "spoolctl is present but not compatible or responsive", observed={"queued_runs": queued}, errors=[exc.error], recommended_action=action("evalctl doctor --component spoolctl --fast --json", "Use fast diagnostics or inspect spoolctl separately."))
+
+
+def probe_inferctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, Any]:
+    provenance_runs = [path.name for path in runs_with_inferctl_state(run_dirs)]
+    binary = inferctl_binary()
+    if fast:
+        return component("unknown" if binary else "not_configured", "fast mode used PATH-only inferctl check", observed={"binary": binary, "provenance_runs": provenance_runs})
+    if binary is None:
+        return component("not_configured", "inferctl is not available on PATH", observed={"provenance_runs": provenance_runs})
+    try:
+        data = inferctl_capabilities(timeout=3)
+        verbs = inferctl_verb_names(data)
+        if "preflight" not in verbs:
+            return component("degraded", "inferctl is present but lacks preflight support", observed={"contract_version": data.get("contract_version"), "verbs": sorted(verbs)}, recommended_action=action("inferctl capabilities --json", "Inspect inferctl capabilities."))
+        return component("healthy", "inferctl preflight support is available", observed={"contract_version": data.get("contract_version"), "verbs": sorted(verbs), "route_available": "route" in verbs})
+    except EvalctlError as exc:
+        return component("degraded", "inferctl is present but not compatible or responsive", errors=[exc.error], observed={"provenance_runs": provenance_runs}, recommended_action=action("evalctl doctor --component inferctl --fast --json", "Use fast diagnostics or inspect inferctl separately."))
+
+
+def probe_runner_safety() -> dict[str, Any]:
+    return component("healthy", "runner and scorer commands execute as local code; evalctl is not a sandbox", observed={"sandboxed": False}, warnings=[{"code": "W_UNSANDBOXED_RUNNER", "message": "inspect suites before running untrusted runner or scorer commands"}])
+
+
+def safe_component_probe(name: str, probe: Any) -> dict[str, Any]:
+    try:
+        return probe()
+    except EvalctlError as exc:
+        return component("unhealthy", f"{name} probe failed", errors=[exc.error])
+    except (OSError, json.JSONDecodeError, subprocess.TimeoutExpired, PermissionError) as exc:
+        return component("unhealthy", f"{name} probe failed", errors=[{"code": "E_RUNNER_FAILED", "message": str(exc)}])
+    except Exception as exc:
+        return component("unhealthy", f"{name} probe failed", errors=[{"code": "E_RUNNER_FAILED", "message": str(exc)}])
+
+
+def doctor_data(component_name: str | None, *, fast: bool) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    root = runs_root()
+    run_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name) if root.exists() else []
+    probes = {
+        "runtime": lambda: probe_runtime(),
+        "suite_root": lambda: probe_suite_root(),
+        "runs_root": lambda: probe_runs_root(),
+        "reservations": lambda: probe_reservations(run_dirs),
+        "spoolctl": lambda: probe_spoolctl_component(run_dirs, fast=fast),
+        "inferctl": lambda: probe_inferctl_component(run_dirs, fast=fast),
+        "runner_safety": lambda: probe_runner_safety(),
+    }
+    selected = [component_name] if component_name else sorted(DOCTOR_COMPONENTS)
+    components = {name: safe_component_probe(name, probes[name]) for name in selected}
+    states = [item["state"] for item in components.values()]
+    if "unhealthy" in states:
+        outcome = "unhealthy"
+    elif "degraded" in states:
+        outcome = "degraded"
+    else:
+        outcome = "healthy"
+    recommended = None
+    for item in components.values():
+        rec = item.get("recommended_action")
+        if rec and not rec.get("is_destructive"):
+            recommended = rec
+            break
+    commands = []
+    if recommended:
+        commands.append({"command": recommended["command"], "rationale": recommended["rationale"]})
+    if component_name is None:
+        commands.append({"command": "evalctl jobs list --limit 50 --json", "rationale": "Inspect local run state."})
+    data = {
+        "operation_outcome": {"kind": outcome, "health_kind": "all-clear" if outcome == "healthy" else "attention-needed"},
+        "components": components,
+        "recommended_action": recommended or action("evalctl jobs list --limit 50 --json", "Inspect local run state."),
+        "fallbacks_active": [],
+    }
+    return data, commands
+
+
+def command_doctor(argv: list[str], json_mode: bool, started: float) -> int:
+    args = strip_flags(argv, DOCTOR_FLAGS_WITH_VALUES, DOCTOR_BOOL_FLAGS)
+    reject_unknown_flags(argv, args, DOCTOR_FLAGS_WITH_VALUES | DOCTOR_BOOL_FLAGS)
+    component_name = value_after(argv, "--component")
+    if component_name is not None and component_name not in DOCTOR_COMPONENTS:
+        raise EvalctlError("E_UNKNOWN_COMPONENT", f"unknown doctor component '{component_name}'", "choose one of the valid component names", 1, valid_values=sorted(DOCTOR_COMPONENTS))
+    if len(args) != 1:
+        raise EvalctlError("E_CASE_INVALID", "doctor accepts only flags", "try: evalctl doctor --json", 1)
+    data, commands = doctor_data(component_name, fast=has_flag(argv, "--fast"))
+    return print_envelope(data, json_mode=json_mode, human=f"doctor: {data['operation_outcome']['kind']}", commands=commands, started=started)
+
+
 def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
     args = strip_flags(argv, JOBS_FLAGS_WITH_VALUES, JOBS_BOOL_FLAGS)
     reject_unknown_flags(argv, args, JOBS_FLAGS_WITH_VALUES | JOBS_BOOL_FLAGS)
@@ -2449,6 +2680,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_init(argv, json_mode, started)
         if cmd == "validate":
             return command_validate(argv, json_mode, started)
+        if cmd == "doctor":
+            return command_doctor(argv, json_mode, started)
         if cmd == "suite":
             if len(argv) > 1 and argv[1] == "add":
                 return command_suite_add(argv, json_mode, started)

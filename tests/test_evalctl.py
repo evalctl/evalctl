@@ -109,7 +109,7 @@ class EvalctlCliTests(unittest.TestCase):
                               capability_flags: object | None = None, include_version: bool = True,
                               data_version: str | None = None) -> Path:
         bindir = cwd / "bin"
-        bindir.mkdir()
+        bindir.mkdir(exist_ok=True)
         script = bindir / "spoolctl"
         if capability_flags is None:
             if capabilities_shape == "compact":
@@ -146,6 +146,7 @@ class EvalctlCliTests(unittest.TestCase):
             "    p = Path(db); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(data, sort_keys=True))\n"
             "args = sys.argv[1:]\n"
             "if args[:2] == ['capabilities', '--json']:\n"
+            "    if CAPABILITIES_SHAPE == 'sleep': time.sleep(30)\n"
             "    if CAPABILITIES_SHAPE == 'bad-json':\n"
             "        print('{not json'); raise SystemExit(0)\n"
             "    if CAPABILITIES_SHAPE == 'error-envelope':\n"
@@ -381,7 +382,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd)
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:49eb3c3e64bd888a9ae9b8b9588bb1fc6af77e9689b043b3daa9c8acee1a0c4c")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:b6d3f000cde58b376ac7d14da9b6277d818fc265f1ae3e87d80c6429c91d4d05")
             self.assertEqual(caps["tool_version"], "0.3.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -392,6 +393,8 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_FLAG"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_SPOOLCTL_UNAVAILABLE"]["exit"], 3)
             self.assertEqual(caps["data"]["error_codes"]["E_JOB_TRANSIENT"]["exit"], 4)
+            self.assertEqual(caps["data"]["error_codes"]["E_INFERCTL_UNAVAILABLE"]["where"], ["doctor"])
+            self.assertEqual(caps["data"]["error_codes"]["E_INFERCTL_INCOMPATIBLE"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_TIMEOUT"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_RUNNER_FAILED"]["surface"], "runner_json")
             self.assertEqual(caps["data"]["error_codes"]["E_SCORER_CASE_FAILED"]["surface"], "score_json")
@@ -401,7 +404,9 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--queue", caps["data"]["verbs"]["run"]["flags"])
             self.assertIn("--slots", caps["data"]["verbs"]["run"]["flags"])
             self.assertIn("--reservation-ttl", caps["data"]["verbs"]["run"]["flags"])
-            for verb in ("run", "jobs", "replay", "suite", "case", "scorer"):
+            self.assertEqual(caps["data"]["verbs"]["doctor"]["mega_command"], "DIAGNOSE")
+            self.assertEqual(caps["data"]["verbs"]["doctor"]["exit_codes"], [0, 1])
+            for verb in ("run", "jobs", "replay", "suite", "case", "scorer", "doctor"):
                 self.assertIn(verb, caps["data"]["verbs"])
             schema = self.envelope(["schema", "run", "--json"], cwd)
             self.assertTrue(schema["ok"])
@@ -417,12 +422,15 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("queue_jobs", jobs_schema["data"]["schemas"]["jobs"]["properties"])
 
             all_schemas = self.envelope(["schema", "--json"], cwd)
-            for verb in ("capabilities", "schema", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"):
+            for verb in ("capabilities", "schema", "init", "validate", "doctor", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report"):
                 verb_schema = all_schemas["data"]["schemas"][verb]
                 self.assertIn("properties", verb_schema)
                 self.assertIn("required", verb_schema)
                 self.assertTrue(verb_schema["additionalProperties"])
-            for verb in ("jobs", "replay", "suite", "case", "scorer"):
+            doctor_schema = self.envelope(["schema", "doctor", "--json"], cwd)
+            self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:6582f8cd37fd09b9ad29c9422da0e2418a5d5a6f9c2105e4dd14f149ef11e0e4")
+            self.assertIn("doctor", doctor_schema["data"]["schemas"])
+            for verb in ("jobs", "replay", "suite", "case", "scorer", "doctor"):
                 single_schema = self.envelope(["schema", verb, "--json"], cwd)
                 self.assertIn(verb, single_schema["data"]["schemas"])
                 self.assertTrue(single_schema["data"]["schemas"][verb]["additionalProperties"])
@@ -432,6 +440,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn('surface:"score_json"', docs.stdout)
             self.assertIn("does not put the per-case reason code in `errors[]`", docs.stdout)
             self.assertIn("did_you_mean", docs.stdout)
+            self.assertIn("doctor --json", docs.stdout)
             self.assertIn("run --resume", docs.stdout)
             self.assertIn("--queue spoolctl", docs.stdout)
 
@@ -905,6 +914,83 @@ class EvalctlCliTests(unittest.TestCase):
             prune_error = json.loads(prune_bad.stdout)["errors"][0]
             self.assertEqual(prune_error["code"], "E_CASE_INVALID")
             self.assertEqual(prune_error["corrected_command"], "evalctl jobs list --limit 50 --json")
+
+    def test_doctor_reports_initialization_and_clean_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            fresh = self.envelope(["doctor", "--json"], cwd)
+            self.assertEqual(fresh["data"]["operation_outcome"]["kind"], "degraded")
+            self.assertEqual(fresh["data"]["components"]["suite_root"]["state"], "degraded")
+            self.assertEqual(fresh["data"]["recommended_action"]["command"], "evalctl init --json")
+
+            self.envelope(["init", "--json"], cwd)
+            initialized = self.envelope(["doctor", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(initialized["data"]["operation_outcome"]["kind"], "healthy")
+            self.assertEqual(initialized["data"]["components"]["suite_root"]["state"], "healthy")
+            self.assertEqual(initialized["data"]["components"]["runs_root"]["state"], "healthy")
+            self.assertEqual(initialized["data"]["components"]["spoolctl"]["state"], "not_configured")
+            self.assertEqual(initialized["data"]["components"]["inferctl"]["state"], "not_configured")
+            self.assertIn("evalctl jobs list --limit 50 --json", {command["command"] for command in initialized["commands"]})
+
+    def test_doctor_reports_stale_reservations_and_scoped_components(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            stale = cwd / "evals" / "runs" / "stale"
+            stale.mkdir(parents=True)
+            cli.write_json(stale / ".reservation.json", {
+                "run_id": "stale",
+                "pid": 123,
+                "host": "test",
+                "started_ts": "1970-01-01T00:00:00Z",
+                "heartbeat_ts": "1970-01-01T00:00:00Z",
+                "ttl_seconds": 1,
+            })
+            doctor = self.envelope(["doctor", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(doctor["data"]["operation_outcome"]["kind"], "degraded")
+            self.assertEqual(doctor["data"]["components"]["reservations"]["state"], "degraded")
+            self.assertEqual(doctor["data"]["recommended_action"]["command"], "evalctl jobs prune --json")
+
+            scoped = self.envelope(["doctor", "--component", "reservations", "--json"], cwd)
+            self.assertEqual(set(scoped["data"]["components"]), {"reservations"})
+
+            bad = self.run_cli(["doctor", "--component", "nope", "--json"], cwd, expect=1)
+            bad_error = json.loads(bad.stdout)["errors"][0]
+            self.assertEqual(bad_error["code"], "E_UNKNOWN_COMPONENT")
+            self.assertIn("inferctl", bad_error["valid_values"])
+
+    def test_doctor_reports_optional_integration_states(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = self.install_fake_spoolctl(cwd, capabilities_shape="bad-json")
+            spool = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(spool["data"]["components"]["spoolctl"]["state"], "degraded")
+            self.assertTrue(spool["data"]["components"]["spoolctl"]["errors"])
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = self.install_fake_spoolctl(cwd, capabilities_shape="sleep")
+            sleepy = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(sleepy["data"]["components"]["spoolctl"]["state"], "degraded")
+            self.assertIn("timed out", sleepy["data"]["components"]["spoolctl"]["errors"][0]["message"])
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            missing = self.envelope(["doctor", "--component", "inferctl", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(missing["data"]["components"]["inferctl"]["state"], "not_configured")
+
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
+            incompatible = self.envelope(["doctor", "--component", "inferctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(incompatible["data"]["components"]["inferctl"]["state"], "degraded")
+
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="preflight-only")
+            compatible = self.envelope(["doctor", "--component", "inferctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            inferctl = compatible["data"]["components"]["inferctl"]
+            self.assertEqual(inferctl["state"], "healthy")
+            self.assertFalse(inferctl["observed"]["route_available"])
 
     def test_case_execution_phase_helpers_are_callable(self) -> None:
         with tempfile.TemporaryDirectory() as td:
