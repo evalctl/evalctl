@@ -11,11 +11,13 @@ durable artifacts. It scores what agents actually do — files written, diffs
 produced, commands run — on your own machine, with no gateway, dashboard, or
 SaaS account.
 
-v0.3 writes durable run metadata, supports crash resume, adds local run-state
-inspection, and can optionally delegate runner execution to
+v0.4 writes durable run metadata, supports crash resume, adds local run-state
+inspection, diagnoses runtime health, produces side-effect-free execution plans,
+and can optionally delegate runner execution to
 [spoolctl](https://github.com/Ozhiaki/spoolctl). The standalone synchronous path
 remains complete and requires no external service. [inferctl](https://inferctl.dev)
-route capture remains deferred.
+preflight provenance can be captured before runner execution without changing
+report scoring.
 
 ## About
 
@@ -38,17 +40,17 @@ evalctl is agent-shaped.
 | --- | --- | --- |
 | Unit under test | prompt → completion | agent run → files, diffs, command logs, artifacts |
 | Scoring surface | text of a response | resulting workspace: git diff, expected/forbidden file changes, exit codes, plus text |
-| Execution | in-process, synchronous | v0.3 synchronous by default; `run --resume` resumes crashed runs; optional `--queue spoolctl` delegates runner execution |
-| Model context | provider API keys | [inferctl](https://inferctl.dev) route/preflight provenance is deferred |
+| Execution | in-process, synchronous | v0.4 synchronous by default; `plan` previews actions, `doctor` diagnoses state, `run --resume` resumes crashed runs; optional `--queue spoolctl` delegates runner execution |
+| Model context | provider API keys | Optional [inferctl](https://inferctl.dev) preflight provenance through `run --inferctl-task`; route capture remains deferred |
 
 ## Status
 
-Python pre-release. v0.3 provides scaffold, validate, bounded parallel run
-execution, durable run metadata, crash resume, local jobs inspection, optional
-spoolctl queueing, status, report, deterministic local scorers, CLI authoring
-verbs, execution replay for failed cases, command scorers, truthful
-warnings/errors, real schema output, and artifact replay from a copied run
-directory.
+Python pre-release. v0.4 provides scaffold, validate, doctor, plan, bounded
+parallel run execution, durable run metadata, crash resume, bounded local jobs
+inspection, optional spoolctl queueing, optional inferctl preflight provenance,
+status, report, deterministic local scorers, CLI authoring verbs, execution
+replay for failed cases, command scorers, truthful warnings/errors, real schema
+output, and artifact replay from a copied run directory.
 `contract_version` remains `1`.
 
 ## Install
@@ -79,8 +81,11 @@ evalctl suite add demo --runner-argv "python3 $EVALCTL_WORKSPACE/r.py" --json
 evalctl case add demo --task "do X" --workspace fixtures/x --expect-json '{"exact":"ok"}' --json
 evalctl scorer add demo --name exact --required --json
 evalctl run demo --json
+evalctl doctor --json
+evalctl plan demo --json
+evalctl run demo --inferctl-task code --json
 evalctl run --resume <run-id> --json
-evalctl jobs list --json
+evalctl jobs list --limit 50 --json
 evalctl run demo --queue spoolctl --slots 4 --json
 evalctl replay --failed <run-id> --json
 evalctl report <run-id> --format json
@@ -101,10 +106,28 @@ reservation is reclaimed by explicit `--resume`. `jobs list|get|prune` inspects
 completed, running, stale, and orphaned local run state and safely prunes only
 with explicit confirmation.
 
+`jobs list` is bounded by default. Use `--limit` and `--cursor` to page through
+large run directories; the JSON envelope includes pagination metadata and a
+paste-ready next-page command when more rows are available.
+
 Durability sidecars are operational state. Reports and artifact replay do not
 require `run.json`, `.reservation.json`, `.spoolctl.db`, `state.json`, or
 `job.json`; `report_hash` stays based on the report projection. `SOURCE_DATE_EPOCH`
 controls `created_ts` for deterministic manifest parity.
+
+## Doctor And Plan
+
+`evalctl doctor --json` reports runtime, suite root, runs root, reservations,
+spoolctl, inferctl, and runner-safety state without failing just because a
+component is degraded. Use `--component NAME` to scope diagnostics and `--fast`
+for PATH-only optional integration checks.
+
+`evalctl plan <suite> --json` resolves the case set without creating run
+directories, enqueueing jobs, executing runners, scoring, or writing inferctl
+artifacts. The plan includes run-id strategy, execution mode, independent-case
+dependency metadata, parallel tracks, per-case actions, warnings, and
+paste-ready follow-up commands. `--resume`, `--queue spoolctl`, `--slots`, and
+`--inferctl-task` mirror the run surface for planning.
 
 ## Optional Spoolctl Queue
 
@@ -114,9 +137,22 @@ stderr, captures workspace diffs, scores cases, and writes terminal markers. If
 spoolctl is absent or incompatible, queued runs fail explicitly; non-queued runs
 do not need spoolctl.
 
-The queue database is per-run at `.spoolctl.db`; v0.3 starts one ephemeral
+The queue database is per-run at `.spoolctl.db`; v0.4 starts one ephemeral
 `spoolctl work --drain` worker per queued run. General externally managed worker
 fleets are not part of this release.
+
+## Inferctl Preflight Provenance
+
+`evalctl run <suite> --inferctl-task TASK --json` probes inferctl once per run
+and, when compatible preflight support is available, writes per-case
+`inferctl-preflight.json` and `inferctl-provenance.json` before runner execution.
+Queued spoolctl runs capture the same artifacts before enqueue. Absence,
+incompatibility, parse failures, timeouts, and policy/readiness blocks are
+warnings; the runner still executes and scoring proceeds.
+
+The v0.4 capture mode is `preflight` only. `inferctl route` is not called, and
+report projection is unchanged, so `report_hash` remains comparable to an
+equivalent run without inferctl.
 
 ## Authoring
 

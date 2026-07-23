@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 - 2026-07-23
+
+Planning, diagnostics, CLI recovery, bounded job listing, and inferctl
+provenance minor release. `contract_version` remains `1`; the changes are
+additive, and report projection remains unchanged for comparable runs.
+
+- Added bounded `jobs list` output with `--limit`, `--cursor`, `total_count`,
+  pagination metadata, truncated metadata, and paste-ready next-page commands.
+- Added structured did-you-mean recovery for unknown top-level commands,
+  namespace subcommands, and checked flag typos, including `did_you_mean`,
+  `corrected_command`, and `valid_values` fields.
+- Added `doctor` diagnostics for runtime, suite root, runs root, reservations,
+  spoolctl, inferctl, and runner-safety state.
+- Added side-effect-free `plan` output for fresh runs, explicit run ids, resume
+  planning, spoolctl queue planning, concurrency tracks, and inferctl task
+  intent.
+- Added `run --inferctl-task TASK` best-effort inferctl preflight provenance.
+  Compatible runs write per-case `inferctl-preflight.json` and
+  `inferctl-provenance.json`; absent, incompatible, blocked, and failed capture
+  states are warnings and do not prevent runner execution or scoring.
+- Updated README, robot docs, schemas, capabilities, help text, warning codes,
+  and regression tests for the v0.4 surfaces.
+
 ## 0.3.0 - 2026-07-16
 
 Durability and resume minor release. `contract_version` remains `1`; the

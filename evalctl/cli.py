@@ -298,6 +298,18 @@ def capabilities_data() -> dict[str, Any]:
         spoolctl_status = {"available": True, "planned": False, "minimum_version": "0.4.1", "version": spool.get("version") or spool.get("tool_version")}
     except EvalctlError:
         spoolctl_status = {"available": False, "planned": False, "minimum_version": "0.4.1"}
+    try:
+        inferctl = inferctl_capabilities(timeout=3)
+        inferctl_verbs = inferctl_verb_names(inferctl)
+        inferctl_status = {
+            "available": "preflight" in inferctl_verbs,
+            "planned": True,
+            "preflight": "preflight" in inferctl_verbs,
+            "route": "route" in inferctl_verbs,
+            "contract_version": inferctl.get("contract_version"),
+        }
+    except EvalctlError:
+        inferctl_status = {"available": False, "planned": True}
     verbs = {
         "capabilities": {"description": "Return the machine contract.", "json": True, "mutates": False, "flags": ["--json"], "exit_codes": [0]},
         "schema": {"description": "Return output schemas.", "json": True, "mutates": False, "args": ["verb"], "flags": ["--json"], "exit_codes": [0, 1]},
@@ -333,7 +345,7 @@ def capabilities_data() -> dict[str, Any]:
         },
         "integrations": {
             "spoolctl": spoolctl_status,
-            "inferctl": {"available": inferctl_binary() is not None, "planned": True},
+            "inferctl": inferctl_status,
         },
         "schemas_uri": "evalctl schema <verb> --json",
         "robot_docs_uri": "evalctl robot-docs guide",

@@ -383,11 +383,11 @@ class EvalctlCliTests(unittest.TestCase):
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            caps = self.envelope(["capabilities", "--json"], cwd)
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
             self.assertEqual(caps["meta"]["data_hash"], "sha256:aa4c860b335417850a2c47ae15e92edf73e0d07a65a1b9060114f4545fdbcb0e")
-            self.assertEqual(caps["tool_version"], "0.3.0")
+            self.assertEqual(caps["tool_version"], "0.4.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
@@ -555,6 +555,28 @@ class EvalctlCliTests(unittest.TestCase):
             bindir = self.install_fake_spoolctl(cwd, version="0.4.2-rc1", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2-rc1")
+
+    def test_capabilities_inferctl_probe_reports_only_compatible_preflight_available(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_fake_inferctl(cwd)
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(caps["data"]["integrations"]["inferctl"]["available"], True)
+            self.assertEqual(caps["data"]["integrations"]["inferctl"]["preflight"], True)
+
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
+            missing = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(missing["data"]["integrations"]["inferctl"], {"available": False, "planned": True, "preflight": False, "route": True, "contract_version": "0.2"})
+
+            bindir = self.install_fake_inferctl(cwd, capabilities_shape="invalid-json")
+            invalid = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            self.assertEqual(invalid["data"]["integrations"]["inferctl"], {"available": False, "planned": True})
+
+            broken = cwd / "broken-bin"
+            broken.mkdir()
+            (broken / "inferctl").write_text("#!/bin/sh\nexit 0\n")
+            nonexec = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(broken)})
+            self.assertEqual(nonexec["data"]["integrations"]["inferctl"], {"available": False, "planned": True})
 
     def test_fake_inferctl_fixture_preserves_contract_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
