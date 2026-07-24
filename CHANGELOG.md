@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.1 - 2026-07-24
+
+CLI grammar hardening and refactor-safety patch. `contract_version` remains
+`1`; command names, envelope shape, artifact layout, report projection, and
+optional integration behavior remain compatible with v0.4.
+
+- Added dev-only subprocess-aware coverage controls and normalized checked-in
+  goldens for help, capabilities, representative schemas, robot docs, and
+  malformed-input error envelopes.
+- Added a typed internal command/flag registry and centralized parser for
+  booleans, positive integers, enums, safe IDs, paths, JSON text, and free
+  text while preserving the public CLI grammar.
+- Reclassified malformed documented inputs as user-input errors. Invalid
+  integer values, zero/negative positive-integer flags, missing values,
+  empty-string values, and registered flags supplied where values are required
+  now return structured `E_CASE_INVALID` envelopes with exit 1 instead of
+  raw tracebacks, internal/environment failures, or silent fallbacks.
+- Unknown flags are rejected consistently across all commands and subcommands
+  before positional interpretation. This changes typo cases such as
+  `init --forse --json` from silent success to `E_UNKNOWN_FLAG` exit 1.
+- Unknown-flag suggestions now account for flag arity. Value-taking suggestions
+  no longer emit syntactically invalid corrected commands unless a value can be
+  preserved safely.
+- Tightened safe IDs so leading-dash values such as `--json` cannot be accepted
+  as run, resume, case, scorer, or inferctl task IDs.
+- Treated `--format` as a report-only flag and made pre-dispatch JSON-mode
+  detection non-raising; malformed `--format` inputs now produce enveloped
+  errors rather than raw tracebacks.
+
 ## 0.4.0 - 2026-07-23
 
 Planning, diagnostics, CLI recovery, bounded job listing, and inferctl

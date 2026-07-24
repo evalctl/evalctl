@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evalctl"
-version = "0.4.0"
+version = "0.4.1"
 description = "Local-first evals for agents, not just prompts."
 readme = "README.md"
 requires-python = ">=3.11"

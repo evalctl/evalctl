@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import pty
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import tomllib
 from pathlib import Path
 
 from evalctl import cli
@@ -477,7 +479,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
             self.assertEqual(caps["meta"]["data_hash"], "sha256:aa4c860b335417850a2c47ae15e92edf73e0d07a65a1b9060114f4545fdbcb0e")
-            self.assertEqual(caps["tool_version"], "0.4.0")
+            self.assertEqual(caps["tool_version"], "0.4.1")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
@@ -552,6 +554,15 @@ class EvalctlCliTests(unittest.TestCase):
 
     def test_static_verb_registry_matches_capabilities(self) -> None:
         self.assertEqual(cli.VERB_NAMES, set(cli.capabilities_data()["verbs"]))
+
+    def test_version_matches_package_metadata_shape(self) -> None:
+        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        version = metadata["project"]["version"]
+        self.assertEqual(cli.__version__, version)
+        self.assertRegex(version, re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9_.-]+)?$"))
+        with tempfile.TemporaryDirectory() as td:
+            result = self.run_cli(["--version"], Path(td))
+            self.assertEqual(result.stdout.strip(), version)
 
     def test_command_registry_matches_capabilities_help_and_validation_sites(self) -> None:
         caps = cli.capabilities_data()
