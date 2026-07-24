@@ -1,0 +1,109 @@
+{
+  "commands": [],
+  "data": {
+    "definitions": {},
+    "envelope_schema": {
+      "properties": {
+        "commands": {
+          "type": "array"
+        },
+        "data": {},
+        "errors": {
+          "type": "array"
+        },
+        "meta": {
+          "type": "object"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "ok",
+        "tool_version",
+        "data",
+        "meta",
+        "warnings",
+        "commands",
+        "errors"
+      ],
+      "type": "object"
+    },
+    "schemas": {
+      "jobs": {
+        "additionalProperties": true,
+        "properties": {
+          "candidates": {
+            "type": "object"
+          },
+          "cases": {
+            "type": "object"
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "queue_jobs": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "refused": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "type": "object"
+          },
+          "reservation": {
+            "type": "object"
+          },
+          "run_dir": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "runs": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          },
+          "total_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    }
+  },
+  "errors": [],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": "sha256:6c51619952aeecaf2915158c570de05659356ac517a020ef34d8492299a62935",
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": true,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}

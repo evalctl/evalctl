@@ -1,0 +1,104 @@
+# evalctl - Agent Workflow Guide
+
+## Quick reference
+
+Capabilities: `evalctl capabilities --json`
+Schemas: `evalctl schema run --json`
+Initialize: `evalctl init --json`
+Validate: `evalctl validate code-review --json`
+Diagnose: `evalctl doctor --json`
+Plan: `evalctl plan code-review --json`
+Run: `evalctl run code-review --json`
+Inspect: `evalctl status <run-id> --json`
+Report: `evalctl report <run-id> --format json`
+Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
+
+## v0.3 workflow
+
+1. Scaffold `evals/suites/code-review/` with `evalctl init`.
+2. Or author a new suite without hand-editing JSON:
+   `evalctl suite add demo --runner-argv "python3 $EVALCTL_WORKSPACE/r.py" --json`;
+   create fixtures; `evalctl case add demo --task "..." --workspace fixtures/x --json`;
+   `evalctl scorer add demo --name exact --required --json`.
+3. Run `evalctl validate <suite> --json` before executing local code.
+4. Run `evalctl doctor --json` when local run state, optional integrations, or
+   runtime health are unclear. Doctor exits 0 when it successfully diagnoses
+   degraded components; malformed diagnostic input exits 1.
+5. Run `evalctl plan <suite> --json` to inspect the resolved case set, run/skip
+   actions, concurrency tracks, optional integration posture, and paste-ready
+   follow-up commands without creating a run directory or executing runners.
+6. Run `evalctl run <suite> --json`. Use `--inferctl-task TASK` when you want
+   best-effort inferctl preflight provenance captured before each runner executes.
+   Absence, incompatibility, preflight blocks, and capture failures are warnings;
+   runner execution and report scoring still proceed. evalctl v0.4 captures
+   preflight only and does not call `inferctl route`.
+7. If a run is interrupted, use `evalctl run --resume <run-id> --json`. Resume uses
+   `run.json`, terminal `cases/<id>/state.json` markers, and the original suite snapshot;
+   it skips terminal cases and re-runs only unfinished cases.
+8. Use `jobs list --limit 50 --json` to inspect completed, running, stale, and
+   orphaned local run state. List output is bounded by default and returns
+   `meta.pagination.next_cursor` plus a next-page command when more runs exist.
+   Use `jobs get <run-id> --json` and `jobs prune --json` for single-run inspection
+   and cleanup. Reservations are TTL files with a background heartbeat; no daemon or
+   lock server is required.
+9. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
+   execution to spoolctl. Spoolctl is optional and must be >= 0.4.1; absent or incompatible
+   spoolctl is a hard error only when `--queue spoolctl` is requested. The queue DB is
+   per-run `.spoolctl.db`, so externally managed cross-machine workers require a shared
+   filesystem and are not a general hosted-worker mode.
+10. Use `status` for run state and recommended next command.
+11. Use `report --format json` for a deterministic report envelope or `--format markdown` for a human report.
+12. Copy a completed run directory anywhere and run `report --run-dir <path> --format json`;
+   evalctl recomputes scores from report artifacts and does not require durability sidecars.
+13. After fixing a failed runner/fixture, run `evalctl replay --failed <run-id> --json`
+   to re-execute only failed/errored cases into a fresh partial run. `replay --run-id`
+   names the destination run, not the source.
+
+## Command scorers
+
+`evalctl scorer add <suite> --name command --id judge1 --argv "python3 scorer.py"`
+adds an external scorer. A command scorer receives `EVALCTL_CASE_FILE`,
+`EVALCTL_OUTPUT_FILE`, and `EVALCTL_WORKSPACE`, emits one JSON verdict, and is executed
+once at run time. Its normalized verdict is stored under
+`cases/<case_id>/scorers/<id>.json`; reports and artifact replay read that artifact and
+never re-execute the scorer binary. Command scorers execute arbitrary local code and are
+covered by the same unsandboxed warning as runners.
+
+## Exit-code branching
+
+`0` success, `1` input error, `2` safety block, `3` tool environment error, `4` retryable transient, `5` conflict, `6` eval failure from `run --fail-on-fail`.
+
+## Error-code surfaces
+
+Codes with `surface:"envelope"` appear in `errors[]` or `warnings[]` and predict
+the command's process-exit class. Codes with `surface:"runner_json"` appear as
+per-case `runner.json.error_code` reason codes. Codes with `surface:"score_json"`
+appear as per-case scorer verdict reason codes, for example
+`E_SCORER_CASE_FAILED` in `cases/<id>/scorers/<scorer_id>.json` or `score.json`.
+A runner timeout, runner spawn failure, or command-scorer failure is reportable
+case data: `run`/`replay` exits 0 by default, exits 6 with `--fail-on-fail`, emits
+`W_PARTIAL_RUN`, and does not put the per-case reason code in `errors[]`.
+Unknown command, subcommand, and checked flag typos use `E_UNKNOWN_COMMAND`,
+`E_UNKNOWN_SUBCOMMAND`, or `E_UNKNOWN_FLAG`; JSON errors include
+`did_you_mean`, `corrected_command`, and `valid_values` when evalctl can safely
+construct a correction.
+
+## Durable runs
+
+Fresh runs write `run.json` once before execution and terminal
+`cases/<case_id>/state.json` markers after each case's report artifacts are complete.
+`manifest.json` is finalized from that durable state. `SOURCE_DATE_EPOCH` controls
+`created_ts`, which makes manifest parity tests deterministic. Durability sidecars are
+operational state and are not part of `report_hash`.
+
+## Artifact writes
+
+JSON artifacts are written by creating a temporary file in the target directory
+and replacing the final path with `os.replace`. This guarantees atomic visibility:
+readers never see a half-written final JSON file. It is not a full crash-durable
+guarantee; v0.1.1 does not fsync files or directories.
+
+## Deferred
+
+Compare, inferctl route capture, externally managed shared worker fleets, and
+LLM-as-judge scoring are roadmap items, not v0.3 commands.

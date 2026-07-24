@@ -16,6 +16,7 @@ from evalctl import cli
 
 ROOT = Path(__file__).resolve().parents[1]
 CMD = [sys.executable, "-m", "evalctl"]
+GOLDENS = ROOT / "tests" / "goldens"
 
 
 class EvalctlCliTests(unittest.TestCase):
@@ -222,6 +223,72 @@ class EvalctlCliTests(unittest.TestCase):
             for key in ("request_id", "ts_iso", "elapsed_ms"):
                 meta.pop(key, None)
         return normalized
+
+    def normalize_golden_envelope(self, payload: dict) -> dict:
+        normalized = json.loads(json.dumps(payload))
+        normalized["tool_version"] = "<TOOL_VERSION>"
+        meta = normalized.get("meta")
+        if isinstance(meta, dict):
+            if "request_id" in meta:
+                meta["request_id"] = "<REQUEST_ID>"
+            if "ts_iso" in meta:
+                meta["ts_iso"] = "<TS_ISO>"
+            if "elapsed_ms" in meta:
+                meta["elapsed_ms"] = "<ELAPSED_MS>"
+        return normalized
+
+    def assert_json_golden(self, name: str, payload: dict) -> None:
+        actual = json.dumps(self.normalize_golden_envelope(payload), indent=2, sort_keys=True) + "\n"
+        expected = (GOLDENS / name).read_text()
+        self.assertEqual(actual, expected)
+
+    def assert_text_golden(self, name: str, text: str) -> None:
+        expected = (GOLDENS / name).read_text()
+        self.assertEqual(text, expected)
+
+    def test_normalized_success_output_goldens(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            env = {"PATH": "/nonexistent"}
+            self.assert_text_golden("help.txt", self.run_cli(["--help"], cwd, extra_env=env).stdout)
+            self.assert_json_golden("capabilities.json", self.envelope(["capabilities", "--json"], cwd, extra_env=env))
+            self.assert_json_golden("schema-run.json", self.envelope(["schema", "run", "--json"], cwd, extra_env=env))
+            self.assert_json_golden("schema-jobs.json", self.envelope(["schema", "jobs", "--json"], cwd, extra_env=env))
+            self.assert_json_golden("schema-plan.json", self.envelope(["schema", "plan", "--json"], cwd, extra_env=env))
+            self.assert_text_golden("robot-docs-guide.txt", self.run_cli(["robot-docs", "guide"], cwd, extra_env=env).stdout)
+
+    def test_coverage_subprocess_startup_records_cli_handlers(self) -> None:
+        try:
+            import coverage  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("coverage is a development-only dependency")
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            cov_dir = cwd / ".coverage-data"
+            cov_dir.mkdir()
+            coveragerc = cwd / ".coveragerc"
+            coveragerc.write_text(
+                "[run]\n"
+                "branch = true\n"
+                "parallel = true\n"
+                f"source = {ROOT / 'evalctl'}\n"
+                f"data_file = {cov_dir / '.coverage'}\n"
+            )
+            env = {
+                "PATH": "/nonexistent",
+                "COVERAGE_PROCESS_START": str(coveragerc),
+                "COVERAGE_FILE": str(cov_dir / ".coverage"),
+            }
+            self.envelope(["init", "--json"], cwd, extra_env=env)
+            self.envelope(["run", "code-review", "--run-id", "coverage-sanity", "--json"], cwd, extra_env=env)
+            subprocess.run([sys.executable, "-m", "coverage", "combine", "--data-file", str(cov_dir / ".coverage"), str(cov_dir)], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            result = subprocess.run([sys.executable, "-m", "coverage", "json", "-o", "-", "--data-file", str(cov_dir / ".coverage")], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            data = json.loads(result.stdout)
+            cli_key = next((key for key in data["files"] if key.endswith("evalctl/cli.py")), None)
+            self.assertIsNotNone(cli_key, result.stdout)
+            executed_lines = set(data["files"][cli_key]["executed_lines"])
+            command_run_line = cli.command_run.__code__.co_firstlineno
+            self.assertIn(command_run_line, executed_lines)
 
     def install_fake_inferctl(self, cwd: Path, *, capabilities_shape: str = "compatible",
                               preflight_mode: str = "success", route_mode: str = "success",

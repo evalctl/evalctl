@@ -1,0 +1,94 @@
+{
+  "commands": [],
+  "data": {
+    "definitions": {},
+    "envelope_schema": {
+      "properties": {
+        "commands": {
+          "type": "array"
+        },
+        "data": {},
+        "errors": {
+          "type": "array"
+        },
+        "meta": {
+          "type": "object"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "ok",
+        "tool_version",
+        "data",
+        "meta",
+        "warnings",
+        "commands",
+        "errors"
+      ],
+      "type": "object"
+    },
+    "schemas": {
+      "plan": {
+        "additionalProperties": true,
+        "properties": {
+          "cases": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "dependency_graph": {
+            "type": "object"
+          },
+          "execution": {
+            "type": "object"
+          },
+          "plan": {
+            "type": "object"
+          },
+          "run": {
+            "type": "object"
+          },
+          "suite": {
+            "type": "object"
+          },
+          "warnings": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "suite",
+          "run",
+          "execution",
+          "dependency_graph",
+          "plan",
+          "cases",
+          "warnings"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "errors": [],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": "sha256:1a71ef66f11e8dbc3895f21cdf60d516e17a1cb7d59576fb84bb938367bb82da",
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": true,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}

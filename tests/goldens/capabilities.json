@@ -1,0 +1,674 @@
+{
+  "commands": [],
+  "data": {
+    "contract_version": 1,
+    "env_vars": {
+      "EVALCTL_CASE_FILE": "materialized case JSON passed to runner",
+      "EVALCTL_DIFF_FILE": "review diff file when present",
+      "EVALCTL_OUTPUT_FILE": "runner response destination",
+      "EVALCTL_TASK_FILE": "task text file",
+      "EVALCTL_WORKSPACE": "fresh per-case workspace",
+      "SOURCE_DATE_EPOCH": "controls deterministic timestamps, including run created_ts"
+    },
+    "error_codes": {
+      "E_CASE_INVALID": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "validate",
+          "run"
+        ]
+      },
+      "E_INFERCTL_INCOMPATIBLE": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "doctor"
+        ]
+      },
+      "E_INFERCTL_UNAVAILABLE": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "doctor"
+        ]
+      },
+      "E_JOB_TRANSIENT": {
+        "class": "transient",
+        "exit": 4,
+        "retryable": true,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "E_RUNNER_FAILED": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": null,
+        "surface": "runner_json",
+        "where": [
+          "run"
+        ]
+      },
+      "E_RUNNER_TIMEOUT": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": null,
+        "surface": "runner_json",
+        "where": [
+          "run"
+        ]
+      },
+      "E_RUN_BUSY": {
+        "class": "transient",
+        "exit": 4,
+        "retryable": true,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "E_RUN_CONFLICT": {
+        "class": "conflict",
+        "exit": 5,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "init",
+          "replay",
+          "suite",
+          "case",
+          "scorer"
+        ]
+      },
+      "E_RUN_CORRUPT": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "resume"
+        ]
+      },
+      "E_RUN_NOT_FOUND": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "status",
+          "report",
+          "resume"
+        ]
+      },
+      "E_SCHEMA_VIOLATION": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "validate",
+          "run"
+        ]
+      },
+      "E_SCORER_CASE_FAILED": {
+        "class": "tool-env",
+        "surface": "score_json",
+        "where": [
+          "run",
+          "replay"
+        ]
+      },
+      "E_SCORER_FAILED": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": null,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "report"
+        ]
+      },
+      "E_SPOOLCTL_INCOMPATIBLE": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "E_SPOOLCTL_UNAVAILABLE": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "E_SUITE_NOT_FOUND": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "report",
+          "validate"
+        ]
+      },
+      "E_UNKNOWN_COMMAND": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "dispatch"
+        ]
+      },
+      "E_UNKNOWN_COMPONENT": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "doctor"
+        ]
+      },
+      "E_UNKNOWN_FLAG": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "replay",
+          "jobs",
+          "plan",
+          "doctor"
+        ]
+      },
+      "E_UNKNOWN_SUBCOMMAND": {
+        "class": "user-input",
+        "exit": 1,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "dispatch"
+        ]
+      },
+      "W_INFERCTL_ABSENT": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "W_INFERCTL_CAPTURE_FAILED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "W_INFERCTL_INCOMPATIBLE": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "W_INFERCTL_PREFLIGHT_BLOCKED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "W_NOTHING_TO_REPLAY": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "replay"
+        ]
+      },
+      "W_OUTPUT_TRUNCATED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run"
+        ]
+      },
+      "W_PARTIAL_RUN": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "report"
+        ]
+      },
+      "W_PATH_UNREADABLE": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run"
+        ]
+      },
+      "W_REPLAY_CASE_ABSENT": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "replay"
+        ]
+      },
+      "W_RESERVATION_RECLAIMED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "resume"
+        ]
+      },
+      "W_RESUME_NOTHING_PENDING": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "resume"
+        ]
+      },
+      "W_TEXT_DIFF_APPROXIMATED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run"
+        ]
+      },
+      "W_UNSANDBOXED_RUNNER": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "run",
+          "replay"
+        ]
+      }
+    },
+    "exit_codes": {
+      "0": {
+        "meaning": "success",
+        "retryable": null
+      },
+      "1": {
+        "meaning": "user-input error",
+        "retryable": false
+      },
+      "2": {
+        "meaning": "safety block",
+        "retryable": false
+      },
+      "3": {
+        "meaning": "tool-environment error",
+        "retryable": null
+      },
+      "4": {
+        "meaning": "transient failure",
+        "retryable": true
+      },
+      "5": {
+        "meaning": "conflict",
+        "retryable": false
+      },
+      "6": {
+        "meaning": "eval failure",
+        "retryable": false
+      }
+    },
+    "features": [
+      "universal_envelope",
+      "deterministic_output",
+      "artifact_replay",
+      "workspace_diff",
+      "authoring",
+      "execution_replay",
+      "command_scorer",
+      "durable_runs",
+      "resumable",
+      "run_state_jobs",
+      "queue_spoolctl",
+      "bounded_jobs_list",
+      "doctor",
+      "plan",
+      "inferctl_preflight_provenance"
+    ],
+    "global_flags": {
+      "--help": "help",
+      "--json": "structured envelope",
+      "--no-color": "suppress ANSI",
+      "--version": "version"
+    },
+    "integrations": {
+      "inferctl": {
+        "available": false,
+        "planned": true
+      },
+      "spoolctl": {
+        "available": false,
+        "minimum_version": "0.4.1",
+        "planned": false
+      }
+    },
+    "robot_docs_uri": "evalctl robot-docs guide",
+    "schemas_uri": "evalctl schema <verb> --json",
+    "tool_name": "evalctl",
+    "verbs": {
+      "capabilities": {
+        "description": "Return the machine contract.",
+        "exit_codes": [
+          0
+        ],
+        "flags": [
+          "--json"
+        ],
+        "json": true,
+        "mutates": false
+      },
+      "case": {
+        "args": [
+          "add",
+          "suite"
+        ],
+        "description": "Author cases, including case add.",
+        "exit_codes": [
+          0,
+          1,
+          5
+        ],
+        "flags": [
+          "--json",
+          "--task",
+          "--workspace",
+          "--id",
+          "--diff",
+          "--expect-json"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "doctor": {
+        "description": "Diagnose evalctl runtime, run state, and optional integrations.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "flags": [
+          "--json",
+          "--component",
+          "--fast"
+        ],
+        "json": true,
+        "mega_command": "DIAGNOSE",
+        "mutates": false
+      },
+      "init": {
+        "description": "Scaffold evals/ tree with sample code-review suite.",
+        "exit_codes": [
+          0,
+          5
+        ],
+        "flags": [
+          "--json",
+          "--force"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "jobs": {
+        "args": [
+          "list",
+          "get",
+          "prune"
+        ],
+        "description": "Inspect and prune local run/reservation/queue state.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "flags": [
+          "--json",
+          "--yes",
+          "--force",
+          "--limit",
+          "--cursor"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "plan": {
+        "args": [
+          "suite"
+        ],
+        "description": "Produce a side-effect-free execution plan.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "flags": [
+          "--json",
+          "--jobs",
+          "--timeout",
+          "--run-id",
+          "--resume",
+          "--queue",
+          "--slots",
+          "--inferctl-task"
+        ],
+        "json": true,
+        "mega_command": "PLAN",
+        "mutates": false
+      },
+      "replay": {
+        "args": [
+          "run-id"
+        ],
+        "description": "Re-execute failed/errored cases from a source run into a linked partial run.",
+        "exit_codes": [
+          0,
+          1,
+          3,
+          4,
+          5,
+          6
+        ],
+        "flags": [
+          "--json",
+          "--failed",
+          "--run-dir",
+          "--suite",
+          "--run-id",
+          "--force",
+          "--jobs",
+          "--timeout",
+          "--fail-on-fail"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "report": {
+        "args": [
+          "run-id"
+        ],
+        "description": "Generate markdown or JSON report from run artifacts.",
+        "exit_codes": [
+          0,
+          1,
+          3
+        ],
+        "flags": [
+          "--json",
+          "--format",
+          "--run-dir"
+        ],
+        "json": true,
+        "mutates": false
+      },
+      "robot-docs": {
+        "args": [
+          "guide"
+        ],
+        "description": "Return agent workflow guide.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "json": false,
+        "mutates": false
+      },
+      "run": {
+        "args": [
+          "suite"
+        ],
+        "description": "Run a suite and produce a portable, resumable run directory.",
+        "exit_codes": [
+          0,
+          1,
+          3,
+          4,
+          5,
+          6
+        ],
+        "flags": [
+          "--json",
+          "--jobs",
+          "--timeout",
+          "--run-id",
+          "--inferctl-task",
+          "--resume",
+          "--queue",
+          "--slots",
+          "--reservation-ttl",
+          "--fail-on-fail"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "schema": {
+        "args": [
+          "verb"
+        ],
+        "description": "Return output schemas.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "flags": [
+          "--json"
+        ],
+        "json": true,
+        "mutates": false
+      },
+      "scorer": {
+        "args": [
+          "add",
+          "suite"
+        ],
+        "description": "Author scorers, including built-in and command scorers.",
+        "exit_codes": [
+          0,
+          1,
+          5
+        ],
+        "flags": [
+          "--json",
+          "--name",
+          "--required",
+          "--advisory",
+          "--id",
+          "--argv",
+          "--command",
+          "--shell",
+          "--timeout"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "status": {
+        "args": [
+          "run-id"
+        ],
+        "description": "Diagnose run state.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "flags": [
+          "--json",
+          "--run-dir"
+        ],
+        "json": true,
+        "mutates": false
+      },
+      "suite": {
+        "args": [
+          "add",
+          "name"
+        ],
+        "description": "Author suites, including suite add.",
+        "exit_codes": [
+          0,
+          1,
+          5
+        ],
+        "flags": [
+          "--json",
+          "--runner-argv",
+          "--runner-command",
+          "--shell"
+        ],
+        "json": true,
+        "mutates": true
+      },
+      "validate": {
+        "args": [
+          "suite"
+        ],
+        "description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.",
+        "exit_codes": [
+          0,
+          1
+        ],
+        "flags": [
+          "--json"
+        ],
+        "json": true,
+        "mutates": false
+      }
+    }
+  },
+  "errors": [],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": "sha256:aa4c860b335417850a2c47ae15e92edf73e0d07a65a1b9060114f4545fdbcb0e",
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": true,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}

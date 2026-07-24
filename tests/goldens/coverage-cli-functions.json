@@ -1,0 +1,1483 @@
+{
+  "coverage_tool": "coverage.py json report plus AST top-level definitions",
+  "source": "evalctl/cli.py",
+  "summary": {
+    "covered_branches": 560,
+    "covered_lines": 1762,
+    "excluded_lines": 0,
+    "missing_branches": 182,
+    "missing_lines": 306,
+    "num_branches": 742,
+    "num_partial_branches": 146,
+    "num_statements": 2068,
+    "percent_branches_covered": 75.47169811320755,
+    "percent_branches_covered_display": "75",
+    "percent_covered": 82.63345195729538,
+    "percent_covered_display": "83",
+    "percent_statements_covered": 85.20309477756287,
+    "percent_statements_covered_display": "85"
+  },
+  "top_level": [
+    {
+      "covered_statement_count": 5,
+      "end_line": 109,
+      "kind": "class",
+      "line": 105,
+      "missing_statement_count": 0,
+      "name": "EvalctlError",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 120,
+      "kind": "function",
+      "line": 112,
+      "missing_statement_count": 2,
+      "name": "now_iso",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 124,
+      "kind": "function",
+      "line": 123,
+      "missing_statement_count": 0,
+      "name": "stable_json",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 128,
+      "kind": "function",
+      "line": 127,
+      "missing_statement_count": 0,
+      "name": "sha256_text",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 132,
+      "kind": "function",
+      "line": 131,
+      "missing_statement_count": 0,
+      "name": "sha256_bytes",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 157,
+      "kind": "function",
+      "line": 135,
+      "missing_statement_count": 0,
+      "name": "envelope",
+      "statement_count": 7,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 161,
+      "kind": "function",
+      "line": 160,
+      "missing_statement_count": 0,
+      "name": "wants_json",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 170,
+      "kind": "function",
+      "line": 164,
+      "missing_statement_count": 1,
+      "name": "value_after",
+      "statement_count": 7,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 174,
+      "kind": "function",
+      "line": 173,
+      "missing_statement_count": 0,
+      "name": "has_flag",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 12,
+      "end_line": 189,
+      "kind": "function",
+      "line": 177,
+      "missing_statement_count": 0,
+      "name": "strip_flags",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 194,
+      "kind": "function",
+      "line": 192,
+      "missing_statement_count": 0,
+      "name": "nearest",
+      "statement_count": 3,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 198,
+      "kind": "function",
+      "line": 197,
+      "missing_statement_count": 0,
+      "name": "command_string",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 207,
+      "kind": "function",
+      "line": 201,
+      "missing_statement_count": 0,
+      "name": "unknown_command_error",
+      "statement_count": 7,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 219,
+      "kind": "function",
+      "line": 210,
+      "missing_statement_count": 0,
+      "name": "unknown_subcommand_error",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 229,
+      "kind": "function",
+      "line": 222,
+      "missing_statement_count": 0,
+      "name": "unknown_flag_error",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 235,
+      "kind": "function",
+      "line": 232,
+      "missing_statement_count": 0,
+      "name": "reject_unknown_flags",
+      "statement_count": 4,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 245,
+      "kind": "function",
+      "line": 238,
+      "missing_statement_count": 1,
+      "name": "print_envelope",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 256,
+      "kind": "function",
+      "line": 248,
+      "missing_statement_count": 1,
+      "name": "print_error",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 292,
+      "kind": "function",
+      "line": 259,
+      "missing_statement_count": 0,
+      "name": "help_text",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 14,
+      "end_line": 352,
+      "kind": "function",
+      "line": 295,
+      "missing_statement_count": 0,
+      "name": "capabilities_data",
+      "statement_count": 14,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 356,
+      "kind": "function",
+      "line": 355,
+      "missing_statement_count": 0,
+      "name": "schema_object",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 524,
+      "kind": "function",
+      "line": 505,
+      "missing_statement_count": 1,
+      "name": "schema_data",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 632,
+      "kind": "function",
+      "line": 527,
+      "missing_statement_count": 0,
+      "name": "robot_docs",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 643,
+      "kind": "function",
+      "line": 635,
+      "missing_statement_count": 1,
+      "name": "resolve_suite",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 652,
+      "kind": "function",
+      "line": 646,
+      "missing_statement_count": 2,
+      "name": "read_json",
+      "statement_count": 7,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 15,
+      "end_line": 675,
+      "kind": "function",
+      "line": 655,
+      "missing_statement_count": 6,
+      "name": "load_cases",
+      "statement_count": 21,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 16,
+      "end_line": 698,
+      "kind": "function",
+      "line": 678,
+      "missing_statement_count": 5,
+      "name": "validate_suite",
+      "statement_count": 21,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 21,
+      "end_line": 748,
+      "kind": "function",
+      "line": 701,
+      "missing_statement_count": 0,
+      "name": "init_project",
+      "statement_count": 21,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 758,
+      "kind": "function",
+      "line": 751,
+      "missing_statement_count": 1,
+      "name": "normalize_rel",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 1,
+      "end_line": 762,
+      "kind": "function",
+      "line": 761,
+      "missing_statement_count": 1,
+      "name": "display_path_name",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 13,
+      "end_line": 784,
+      "kind": "function",
+      "line": 765,
+      "missing_statement_count": 6,
+      "name": "manifest",
+      "statement_count": 19,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 798,
+      "kind": "function",
+      "line": 787,
+      "missing_statement_count": 2,
+      "name": "diff_manifests",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 811,
+      "kind": "function",
+      "line": 801,
+      "missing_statement_count": 3,
+      "name": "apply_redaction",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 11,
+      "end_line": 825,
+      "kind": "function",
+      "line": 814,
+      "missing_statement_count": 0,
+      "name": "_atomic_write",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 829,
+      "kind": "function",
+      "line": 828,
+      "missing_statement_count": 0,
+      "name": "write_json",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 842,
+      "kind": "function",
+      "line": 832,
+      "missing_statement_count": 2,
+      "name": "parse_jobs",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 855,
+      "kind": "function",
+      "line": 845,
+      "missing_statement_count": 3,
+      "name": "parse_positive_int_flag",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 13,
+      "end_line": 870,
+      "kind": "function",
+      "line": 858,
+      "missing_statement_count": 0,
+      "name": "parse_jobs_list_limit",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 878,
+      "kind": "function",
+      "line": 873,
+      "missing_statement_count": 0,
+      "name": "version_tuple",
+      "statement_count": 6,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 885,
+      "kind": "function",
+      "line": 881,
+      "missing_statement_count": 0,
+      "name": "spoolctl_binary",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 18,
+      "end_line": 907,
+      "kind": "function",
+      "line": 888,
+      "missing_statement_count": 2,
+      "name": "run_spoolctl_json",
+      "statement_count": 20,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 919,
+      "kind": "function",
+      "line": 910,
+      "missing_statement_count": 4,
+      "name": "spoolctl_json",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 931,
+      "kind": "function",
+      "line": 922,
+      "missing_statement_count": 0,
+      "name": "spoolctl_flag_names",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 22,
+      "end_line": 958,
+      "kind": "function",
+      "line": 934,
+      "missing_statement_count": 2,
+      "name": "probe_spoolctl",
+      "statement_count": 24,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 964,
+      "kind": "function",
+      "line": 961,
+      "missing_statement_count": 0,
+      "name": "render_runner_arg",
+      "statement_count": 4,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 968,
+      "kind": "function",
+      "line": 967,
+      "missing_statement_count": 0,
+      "name": "is_safe_id",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 973,
+      "kind": "function",
+      "line": 971,
+      "missing_statement_count": 0,
+      "name": "validate_suite_name",
+      "statement_count": 3,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 987,
+      "kind": "function",
+      "line": 976,
+      "missing_statement_count": 3,
+      "name": "normalize_suite_rel",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 995,
+      "kind": "function",
+      "line": 990,
+      "missing_statement_count": 0,
+      "name": "decode_subprocess_output",
+      "statement_count": 6,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 1002,
+      "kind": "function",
+      "line": 998,
+      "missing_statement_count": 0,
+      "name": "score_summary",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 14,
+      "end_line": 1034,
+      "kind": "function",
+      "line": 1005,
+      "missing_statement_count": 0,
+      "name": "case_manifest_entry",
+      "statement_count": 14,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 1041,
+      "kind": "function",
+      "line": 1040,
+      "missing_statement_count": 0,
+      "name": "write_terminal_marker",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 1049,
+      "kind": "function",
+      "line": 1044,
+      "missing_statement_count": 0,
+      "name": "is_terminal_marker",
+      "statement_count": 6,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 1056,
+      "kind": "function",
+      "line": 1052,
+      "missing_statement_count": 0,
+      "name": "terminal_marker_count",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 1065,
+      "kind": "function",
+      "line": 1059,
+      "missing_statement_count": 0,
+      "name": "case_entry_from_artifacts",
+      "statement_count": 7,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 1069,
+      "kind": "function",
+      "line": 1068,
+      "missing_statement_count": 0,
+      "name": "reservation_path",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 1073,
+      "kind": "function",
+      "line": 1072,
+      "missing_statement_count": 0,
+      "name": "parse_iso_timestamp",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 1084,
+      "kind": "function",
+      "line": 1076,
+      "missing_statement_count": 2,
+      "name": "read_reservation",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 1094,
+      "kind": "function",
+      "line": 1087,
+      "missing_statement_count": 2,
+      "name": "reservation_is_live",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 1105,
+      "kind": "function",
+      "line": 1097,
+      "missing_statement_count": 0,
+      "name": "write_reservation",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 1112,
+      "kind": "function",
+      "line": 1108,
+      "missing_statement_count": 2,
+      "name": "clear_reservation",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 19,
+      "end_line": 1149,
+      "kind": "class",
+      "line": 1115,
+      "missing_statement_count": 7,
+      "name": "ReservationHeartbeat",
+      "statement_count": 26,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 11,
+      "end_line": 1164,
+      "kind": "function",
+      "line": 1152,
+      "missing_statement_count": 2,
+      "name": "split_completed_and_pending",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 1169,
+      "kind": "function",
+      "line": 1167,
+      "missing_statement_count": 0,
+      "name": "clean_pending_case_dirs",
+      "statement_count": 3,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 1181,
+      "kind": "function",
+      "line": 1172,
+      "missing_statement_count": 0,
+      "name": "dedupe_warnings",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 16,
+      "end_line": 1207,
+      "kind": "function",
+      "line": 1184,
+      "missing_statement_count": 0,
+      "name": "inferctl_run_context",
+      "statement_count": 16,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 1218,
+      "kind": "function",
+      "line": 1210,
+      "missing_statement_count": 3,
+      "name": "inferctl_payload_data",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 1228,
+      "kind": "function",
+      "line": 1221,
+      "missing_statement_count": 4,
+      "name": "inferctl_warning_codes",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 1238,
+      "kind": "function",
+      "line": 1231,
+      "missing_statement_count": 3,
+      "name": "inferctl_error_codes",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 11,
+      "end_line": 1262,
+      "kind": "function",
+      "line": 1241,
+      "missing_statement_count": 1,
+      "name": "inferctl_preflight_summary",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 29,
+      "end_line": 1320,
+      "kind": "function",
+      "line": 1265,
+      "missing_statement_count": 14,
+      "name": "capture_inferctl_preflight",
+      "statement_count": 43,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 7,
+      "end_line": 1362,
+      "kind": "function",
+      "line": 1323,
+      "missing_statement_count": 31,
+      "name": "synthesize_case_error",
+      "statement_count": 38,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 28,
+      "end_line": 1418,
+      "kind": "function",
+      "line": 1365,
+      "missing_statement_count": 0,
+      "name": "prepare_case_workspace",
+      "statement_count": 28,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 36,
+      "end_line": 1474,
+      "kind": "function",
+      "line": 1421,
+      "missing_statement_count": 6,
+      "name": "execute_runner_in_process",
+      "statement_count": 42,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 29,
+      "end_line": 1508,
+      "kind": "function",
+      "line": 1477,
+      "missing_statement_count": 0,
+      "name": "normalize_runner_artifacts",
+      "statement_count": 29,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 22,
+      "end_line": 1532,
+      "kind": "function",
+      "line": 1511,
+      "missing_statement_count": 0,
+      "name": "capture_workspace_after_and_score",
+      "statement_count": 22,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 1551,
+      "kind": "function",
+      "line": 1535,
+      "missing_statement_count": 4,
+      "name": "spoolctl_runner_command",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 12,
+      "end_line": 1575,
+      "kind": "function",
+      "line": 1554,
+      "missing_statement_count": 1,
+      "name": "spoolctl_add_case",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 1582,
+      "kind": "function",
+      "line": 1578,
+      "missing_statement_count": 1,
+      "name": "latest_terminal_attempt",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 1602,
+      "kind": "function",
+      "line": 1585,
+      "missing_statement_count": 0,
+      "name": "runner_result_from_spoolctl_attempt",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 35,
+      "end_line": 1645,
+      "kind": "function",
+      "line": 1605,
+      "missing_statement_count": 2,
+      "name": "execute_spoolctl_pending_cases",
+      "statement_count": 37,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 13,
+      "end_line": 1661,
+      "kind": "function",
+      "line": 1648,
+      "missing_statement_count": 0,
+      "name": "run_case",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 1665,
+      "kind": "function",
+      "line": 1664,
+      "missing_statement_count": 0,
+      "name": "render_text_diff",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 14,
+      "end_line": 1691,
+      "kind": "function",
+      "line": 1668,
+      "missing_statement_count": 7,
+      "name": "score_case",
+      "statement_count": 21,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 1707,
+      "kind": "function",
+      "line": 1694,
+      "missing_statement_count": 0,
+      "name": "scorer_failure",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 21,
+      "end_line": 1745,
+      "kind": "function",
+      "line": 1710,
+      "missing_statement_count": 6,
+      "name": "normalize_command_verdict",
+      "statement_count": 27,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 53,
+      "end_line": 1823,
+      "kind": "function",
+      "line": 1748,
+      "missing_statement_count": 17,
+      "name": "run_command_scorer",
+      "statement_count": 70,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 58,
+      "end_line": 1896,
+      "kind": "function",
+      "line": 1826,
+      "missing_statement_count": 9,
+      "name": "run_scorer",
+      "statement_count": 67,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 1901,
+      "kind": "function",
+      "line": 1899,
+      "missing_statement_count": 0,
+      "name": "command_init",
+      "statement_count": 3,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 1908,
+      "kind": "function",
+      "line": 1904,
+      "missing_statement_count": 0,
+      "name": "command_validate",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 12,
+      "end_line": 1934,
+      "kind": "function",
+      "line": 1911,
+      "missing_statement_count": 2,
+      "name": "runner_from_authoring_flags",
+      "statement_count": 14,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 23,
+      "end_line": 1965,
+      "kind": "function",
+      "line": 1937,
+      "missing_statement_count": 0,
+      "name": "suite_add_data",
+      "statement_count": 23,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 1973,
+      "kind": "function",
+      "line": 1968,
+      "missing_statement_count": 1,
+      "name": "command_suite_add",
+      "statement_count": 6,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 31,
+      "end_line": 2019,
+      "kind": "function",
+      "line": 1976,
+      "missing_statement_count": 12,
+      "name": "case_add_data",
+      "statement_count": 43,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 2033,
+      "kind": "function",
+      "line": 2022,
+      "missing_statement_count": 3,
+      "name": "command_case_add",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 30,
+      "end_line": 2082,
+      "kind": "function",
+      "line": 2036,
+      "missing_statement_count": 16,
+      "name": "command_scorer_config",
+      "statement_count": 46,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 2088,
+      "kind": "function",
+      "line": 2085,
+      "missing_statement_count": 0,
+      "name": "scorer_key",
+      "statement_count": 4,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 17,
+      "end_line": 2110,
+      "kind": "function",
+      "line": 2091,
+      "missing_statement_count": 3,
+      "name": "scorer_add_data",
+      "statement_count": 20,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 2119,
+      "kind": "function",
+      "line": 2113,
+      "missing_statement_count": 1,
+      "name": "command_scorer_add",
+      "statement_count": 7,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2123,
+      "kind": "function",
+      "line": 2122,
+      "missing_statement_count": 0,
+      "name": "timeout_seconds_for_run",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 2141,
+      "kind": "function",
+      "line": 2126,
+      "missing_statement_count": 0,
+      "name": "build_run_metadata",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 2148,
+      "kind": "function",
+      "line": 2144,
+      "missing_statement_count": 1,
+      "name": "write_run_metadata_once",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 2166,
+      "kind": "function",
+      "line": 2151,
+      "missing_statement_count": 0,
+      "name": "manifest_from_run_metadata",
+      "statement_count": 8,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 16,
+      "end_line": 2190,
+      "kind": "function",
+      "line": 2169,
+      "missing_statement_count": 6,
+      "name": "read_run_metadata",
+      "statement_count": 22,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 11,
+      "end_line": 2208,
+      "kind": "function",
+      "line": 2193,
+      "missing_statement_count": 0,
+      "name": "finalize_run",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 27,
+      "end_line": 2241,
+      "kind": "function",
+      "line": 2211,
+      "missing_statement_count": 0,
+      "name": "execute_pending_cases",
+      "statement_count": 27,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 19,
+      "end_line": 2268,
+      "kind": "function",
+      "line": 2244,
+      "missing_statement_count": 0,
+      "name": "execute_cases",
+      "statement_count": 19,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2280,
+      "kind": "function",
+      "line": 2271,
+      "missing_statement_count": 0,
+      "name": "plan_case_entry",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 2291,
+      "kind": "function",
+      "line": 2283,
+      "missing_statement_count": 0,
+      "name": "build_tracks",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 81,
+      "end_line": 2418,
+      "kind": "function",
+      "line": 2294,
+      "missing_statement_count": 21,
+      "name": "command_plan",
+      "statement_count": 102,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 51,
+      "end_line": 2474,
+      "kind": "function",
+      "line": 2421,
+      "missing_statement_count": 3,
+      "name": "command_run",
+      "statement_count": 54,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 39,
+      "end_line": 2527,
+      "kind": "function",
+      "line": 2477,
+      "missing_statement_count": 10,
+      "name": "command_run_resume",
+      "statement_count": 49,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2531,
+      "kind": "function",
+      "line": 2530,
+      "missing_statement_count": 0,
+      "name": "runs_root",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 2545,
+      "kind": "function",
+      "line": 2534,
+      "missing_statement_count": 2,
+      "name": "stored_queue_jobs",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 11,
+      "end_line": 2560,
+      "kind": "function",
+      "line": 2548,
+      "missing_statement_count": 2,
+      "name": "run_case_counts",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 18,
+      "end_line": 2590,
+      "kind": "function",
+      "line": 2563,
+      "missing_statement_count": 2,
+      "name": "classify_run_dir",
+      "statement_count": 20,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2594,
+      "kind": "function",
+      "line": 2593,
+      "missing_statement_count": 0,
+      "name": "action",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 4,
+      "end_line": 2600,
+      "kind": "function",
+      "line": 2597,
+      "missing_statement_count": 0,
+      "name": "component",
+      "statement_count": 4,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2604,
+      "kind": "function",
+      "line": 2603,
+      "missing_statement_count": 0,
+      "name": "runs_with_queue_state",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2608,
+      "kind": "function",
+      "line": 2607,
+      "missing_statement_count": 0,
+      "name": "runs_with_inferctl_state",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2612,
+      "kind": "function",
+      "line": 2611,
+      "missing_statement_count": 0,
+      "name": "inferctl_binary",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 15,
+      "end_line": 2636,
+      "kind": "function",
+      "line": 2615,
+      "missing_statement_count": 7,
+      "name": "inferctl_capabilities",
+      "statement_count": 22,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 2644,
+      "kind": "function",
+      "line": 2639,
+      "missing_statement_count": 1,
+      "name": "inferctl_verb_names",
+      "statement_count": 6,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 2654,
+      "kind": "function",
+      "line": 2647,
+      "missing_statement_count": 0,
+      "name": "probe_runtime",
+      "statement_count": 3,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 2668,
+      "kind": "function",
+      "line": 2657,
+      "missing_statement_count": 3,
+      "name": "probe_suite_root",
+      "statement_count": 12,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 8,
+      "end_line": 2679,
+      "kind": "function",
+      "line": 2671,
+      "missing_statement_count": 1,
+      "name": "probe_runs_root",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 2691,
+      "kind": "function",
+      "line": 2682,
+      "missing_statement_count": 0,
+      "name": "probe_reservations",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 13,
+      "end_line": 2709,
+      "kind": "function",
+      "line": 2694,
+      "missing_statement_count": 3,
+      "name": "probe_spoolctl_component",
+      "statement_count": 16,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 12,
+      "end_line": 2726,
+      "kind": "function",
+      "line": 2712,
+      "missing_statement_count": 3,
+      "name": "probe_inferctl_component",
+      "statement_count": 15,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2730,
+      "kind": "function",
+      "line": 2729,
+      "missing_statement_count": 0,
+      "name": "probe_runner_safety",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 3,
+      "end_line": 2741,
+      "kind": "function",
+      "line": 2733,
+      "missing_statement_count": 6,
+      "name": "safe_component_probe",
+      "statement_count": 9,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 24,
+      "end_line": 2782,
+      "kind": "function",
+      "line": 2744,
+      "missing_statement_count": 1,
+      "name": "doctor_data",
+      "statement_count": 25,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 2794,
+      "kind": "function",
+      "line": 2785,
+      "missing_statement_count": 1,
+      "name": "command_doctor",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 51,
+      "end_line": 2859,
+      "kind": "function",
+      "line": 2797,
+      "missing_statement_count": 3,
+      "name": "command_jobs",
+      "statement_count": 54,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 13,
+      "end_line": 2876,
+      "kind": "function",
+      "line": 2862,
+      "missing_statement_count": 2,
+      "name": "parse_replay_source",
+      "statement_count": 15,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 44,
+      "end_line": 2932,
+      "kind": "function",
+      "line": 2879,
+      "missing_statement_count": 6,
+      "name": "command_replay",
+      "statement_count": 50,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 5,
+      "end_line": 2939,
+      "kind": "function",
+      "line": 2935,
+      "missing_statement_count": 0,
+      "name": "status_counts",
+      "statement_count": 5,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2947,
+      "kind": "function",
+      "line": 2942,
+      "missing_statement_count": 0,
+      "name": "run_identity",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 2,
+      "end_line": 2955,
+      "kind": "function",
+      "line": 2950,
+      "missing_statement_count": 0,
+      "name": "manifest_identity",
+      "statement_count": 2,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 2969,
+      "kind": "function",
+      "line": 2958,
+      "missing_statement_count": 2,
+      "name": "resolve_run",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 13,
+      "end_line": 2984,
+      "kind": "function",
+      "line": 2972,
+      "missing_statement_count": 0,
+      "name": "recompute_case_score",
+      "statement_count": 13,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 17,
+      "end_line": 3004,
+      "kind": "function",
+      "line": 2987,
+      "missing_statement_count": 0,
+      "name": "report_data",
+      "statement_count": 17,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 10,
+      "end_line": 3016,
+      "kind": "function",
+      "line": 3007,
+      "missing_statement_count": 0,
+      "name": "markdown_report",
+      "statement_count": 10,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 6,
+      "end_line": 3024,
+      "kind": "function",
+      "line": 3019,
+      "missing_statement_count": 0,
+      "name": "command_status",
+      "statement_count": 6,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 9,
+      "end_line": 3037,
+      "kind": "function",
+      "line": 3027,
+      "missing_statement_count": 2,
+      "name": "command_report",
+      "statement_count": 11,
+      "zero_covered": false
+    },
+    {
+      "covered_statement_count": 53,
+      "end_line": 3098,
+      "kind": "function",
+      "line": 3040,
+      "missing_statement_count": 6,
+      "name": "main",
+      "statement_count": 59,
+      "zero_covered": false
+    }
+  ],
+  "zero_covered_top_level": []
+}

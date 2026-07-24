@@ -27,5 +27,18 @@ Changelog = "https://github.com/evalctl/evalctl/blob/main/CHANGELOG.md"
 [project.scripts]
 evalctl = "evalctl.cli:main"
 
+[project.optional-dependencies]
+dev = [
+  "coverage>=7",
+]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+source = ["evalctl"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.setuptools.packages.find]
 include = ["evalctl*"]
