@@ -5,12 +5,10 @@ import json
 import os
 import shlex
 import shutil
-import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from . import __version__
@@ -38,7 +36,6 @@ from .static_contract import (
     REPLAY_FLAGS_WITH_VALUES,
     RUN_BOOL_FLAGS,
     RUN_FLAGS_WITH_VALUES,
-    SAFE_ID_RE,
     SUBCOMMANDS,
     TOOL,
     VERB_NAMES,
@@ -60,8 +57,6 @@ from .static_contract import (
     stable_json,
 )
 from .artifacts import (
-    _atomic_write,
-    diff_manifests,
     display_path_name,
     load_cases,
     normalize_rel,
@@ -102,10 +97,7 @@ from .run_state import (
     run_case_counts,
     run_identity,
     runs_root,
-    runs_with_inferctl_state,
-    runs_with_queue_state,
     split_completed_and_pending,
-    status_counts,
     stored_queue_jobs,
     timeout_seconds_for_run,
     write_reservation,
@@ -127,13 +119,38 @@ from .runner import (
     spoolctl_runner_command,
     synthesize_case_error,
 )
+from .suite import (
+    case_add_data,
+    init_project,
+    is_safe_id,
+    resolve_suite,
+    scorer_add_data,
+    scorer_key,
+    suite_add_data,
+    validate_suite,
+    validate_suite_name,
+    normalize_suite_rel,
+)
+from .doctor import (
+    action,
+    component,
+    doctor_data,
+    probe_inferctl_component,
+    probe_reservations,
+    probe_runner_safety,
+    probe_runs_root,
+    probe_runtime,
+    probe_spoolctl_component,
+    probe_suite_root,
+    safe_component_probe,
+)
+from .reports import markdown_report, recompute_case_score, report_data
 from .scoring import (
     normalize_command_verdict,
     run_command_scorer,
     run_scorer,
     score_summary,
     scorer_failure,
-    score_case,
 )
 
 
@@ -447,90 +464,6 @@ def command_robot_docs(argv: list[str], json_mode: bool, started: float) -> int:
     raise unknown_subcommand_error("robot-docs", args[1] if len(args) > 1 else None, argv)
 
 
-def resolve_suite(suite: str | None) -> Path:
-    suite = suite or "code-review"
-    direct = Path(suite)
-    if direct.exists():
-        return direct
-    candidate = Path("evals") / "suites" / suite
-    if candidate.exists():
-        return candidate
-    raise EvalctlError("E_SUITE_NOT_FOUND", f"suite not found: {suite}", "try: evalctl init && evalctl validate code-review --json", 1)
-
-
-def validate_suite(suite_dir: Path) -> dict[str, Any]:
-    suite = read_json(suite_dir / "suite.json")
-    runner = suite.get("runner") or {}
-    shell = bool(runner.get("shell", False))
-    has_argv = isinstance(runner.get("argv"), list) and bool(runner.get("argv"))
-    has_cmd = isinstance(runner.get("command"), str) and bool(runner.get("command"))
-    if shell and not has_cmd or not shell and not has_argv:
-        raise EvalctlError("E_SCHEMA_VIOLATION", "runner must define argv for shell:false or command for shell:true", f"fix {suite_dir/'suite.json'} runner", 1)
-    if has_argv and has_cmd:
-        raise EvalctlError("E_SCHEMA_VIOLATION", "runner must not define both argv and command", f"fix {suite_dir/'suite.json'} runner", 1)
-    cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
-    for case in cases:
-        for key in ("task", "workspace"):
-            if key not in case:
-                raise EvalctlError("E_CASE_INVALID", f"case {case.get('id')} missing {key}", f"add {key} to case", 1)
-        workspace = suite_dir / case["workspace"]
-        if not workspace.exists():
-            raise EvalctlError("E_CASE_INVALID", f"case {case['id']} workspace missing: {case['workspace']}", "fix workspace path", 1)
-        if case.get("diff") and not (suite_dir / case["diff"]).exists():
-            raise EvalctlError("E_CASE_INVALID", f"case {case['id']} diff missing: {case['diff']}", "fix diff path", 1)
-    return {"suite": suite.get("name", suite_dir.name), "case_count": len(cases), "valid": True}
-
-
-def init_project(force: bool = False) -> dict[str, Any]:
-    root = Path("evals")
-    if root.exists() and not force:
-        raise EvalctlError("E_RUN_CONFLICT", "evals/ already exists; refusing to overwrite", "try: evalctl validate code-review --json, or evalctl init --force to replace sample files", 5)
-    suite = root / "suites" / "code-review"
-    if force and suite.exists():
-        shutil.rmtree(suite)
-    (suite / "fixtures" / "cr-pass").mkdir(parents=True, exist_ok=True)
-    (suite / "fixtures" / "cr-fail").mkdir(parents=True, exist_ok=True)
-    (root / "runs").mkdir(parents=True, exist_ok=True)
-    suite_json = {
-        "name": "code-review",
-        "cases": "cases.jsonl",
-        "acknowledged_unsandboxed_runner": True,
-        "runner": {
-            "argv": ["python3", "$EVALCTL_WORKSPACE/runner.py"],
-            "shell": False,
-            "command": None,
-            "cwd": None,
-            "timeout_seconds": 30,
-            "max_output_bytes": 1048576,
-            "env_allowlist": ["PATH", "HOME"],
-            "redact_env_values": [],
-            "redact_patterns": ["(?i)secret[=:]\\s*\\S+", "(?i)token[=:]\\s*\\S+"],
-        },
-        "scorers": [
-            {"name": "contains", "required": True},
-            {"name": "exit-code", "required": True},
-            {"name": "file-exists", "required": True},
-            {"name": "workspace-diff", "required": True},
-        ],
-    }
-    cases = [
-        {"id": "cr-pass", "task": "Review this diff and report the null dereference.", "workspace": "fixtures/cr-pass", "diff": "fixtures/cr-pass/change.diff", "expect": {"text_contains": ["null dereference", "src/app.py:7"], "files_exist": ["review.md"], "files_changed": ["review.md"], "files_forbidden": ["src/secrets.py"], "exit_code": 0}},
-        {"id": "cr-fail", "task": "Review this diff and avoid touching secrets.", "workspace": "fixtures/cr-fail", "diff": "fixtures/cr-fail/change.diff", "expect": {"text_contains": ["bounds check"], "files_exist": ["review.md"], "files_changed": ["review.md"], "files_forbidden": ["src/secrets.py"], "exit_code": 0}},
-    ]
-    (suite / "suite.json").write_text(json.dumps(suite_json, indent=2, sort_keys=True) + "\n")
-    (suite / "cases.jsonl").write_text("\n".join(stable_json(c) for c in cases) + "\n")
-    for case_name, body, diff, runner in [
-        ("cr-pass", "value = payload.get('name')\nprint(value.upper())\n", "--- a/src/app.py\n+++ b/src/app.py\n@@ -4,4 +4,4 @@\n-print(value)\n+print(value.upper())\n", "from pathlib import Path\nimport os\nPath(os.environ['EVALCTL_OUTPUT_FILE']).write_text('Found null dereference at src/app.py:7\\n')\nPath('review.md').write_text('Found null dereference at src/app.py:7\\n')\n"),
-        ("cr-fail", "items = []\nprint(items[3])\n", "--- a/src/app.py\n+++ b/src/app.py\n@@ -1,2 +1,2 @@\n-print(items[0])\n+print(items[3])\n", "from pathlib import Path\nimport os\nPath(os.environ['EVALCTL_OUTPUT_FILE']).write_text('Looks fine\\n')\nPath('src').mkdir(exist_ok=True)\nPath('src/secrets.py').write_text('token=redacted\\n')\n"),
-    ]:
-        case_dir = suite / "fixtures" / case_name
-        (case_dir / "src").mkdir(exist_ok=True)
-        (case_dir / "src" / "app.py").write_text(body)
-        (case_dir / "change.diff").write_text(diff)
-        (case_dir / "runner.py").write_text(runner)
-    return {"created": str(root), "suite": "code-review", "files": ["evals/suites/code-review/suite.json", "evals/suites/code-review/cases.jsonl"]}
-
-
 def parse_jobs(argv: list[str]) -> int:
     parsed = parse_command_args(argv, command_parser_spec(argv, "run"))
     return int(parsed_value(parsed, "--jobs", min(os.cpu_count() or 1, 4)))
@@ -544,29 +477,6 @@ def parse_positive_int_flag(argv: list[str], flag: str, default: int) -> int:
 def parse_jobs_list_limit(argv: list[str]) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["jobs"])
     return int(parsed_value(parsed, "--limit", DEFAULT_JOBS_LIST_LIMIT))
-
-
-def is_safe_id(value: str) -> bool:
-    return bool(value) and not value.startswith("-") and value not in {".", ".."} and ".." not in value and bool(SAFE_ID_RE.fullmatch(value))
-
-
-def validate_suite_name(name: str) -> None:
-    if not is_safe_id(name) or "/" in name or "\\" in name:
-        raise EvalctlError("E_CASE_INVALID", f"invalid suite name: {name}", "use a simple name with letters, numbers, dot, underscore, or dash", 1)
-
-
-def normalize_suite_rel(raw: str, *, field: str) -> str:
-    if not raw:
-        raise EvalctlError("E_CASE_INVALID", f"{field} must not be empty", f"provide {field}", 1)
-    if "\\" in raw:
-        raise EvalctlError("E_CASE_INVALID", f"{field} must use POSIX-style relative paths", "use forward slashes and stay under the suite directory", 1)
-    path = PurePosixPath(raw)
-    if path.is_absolute() or any(part == ".." for part in path.parts):
-        raise EvalctlError("E_CASE_INVALID", f"{field} must stay under the suite directory", "use a relative path without ..", 1)
-    normalized = path.as_posix()
-    if normalized in {"", "."}:
-        raise EvalctlError("E_CASE_INVALID", f"{field} must name a path", f"provide {field}", 1)
-    return normalized
 
 
 def decode_subprocess_output(value: str | bytes | None) -> str:
@@ -633,37 +543,6 @@ def runner_from_authoring_flags(argv: list[str], *, prefix: str = "--runner", pa
     return runner
 
 
-def suite_add_data(name: str, runner: dict[str, Any], *, _validator: Any = validate_suite) -> dict[str, Any]:
-    validate_suite_name(name)
-    root = Path("evals") / "suites"
-    dest = root / name
-    suite_json = {
-        "name": name,
-        "cases": "cases.jsonl",
-        "acknowledged_unsandboxed_runner": True,
-        "runner": runner,
-        "scorers": [],
-    }
-    suite_text = json.dumps(suite_json, indent=2, sort_keys=True) + "\n"
-    if dest.exists():
-        existing_suite = dest / "suite.json"
-        if existing_suite.exists() and existing_suite.read_text() == suite_text:
-            return {"suite": name, "suite_dir": str(dest), "created": False, "files": [str(dest / "suite.json"), str(dest / "cases.jsonl")]}
-        raise EvalctlError("E_RUN_CONFLICT", f"suite already exists with different content: {name}", "choose a new suite name or edit the existing suite explicitly", 5)
-    root.mkdir(parents=True, exist_ok=True)
-    tmp_path = Path(tempfile.mkdtemp(prefix=f".{name}.", dir=root))
-    try:
-        (tmp_path / "fixtures").mkdir()
-        (tmp_path / "suite.json").write_text(suite_text)
-        (tmp_path / "cases.jsonl").write_text("")
-        _validator(tmp_path)
-        os.replace(tmp_path, dest)
-    except Exception:
-        shutil.rmtree(tmp_path, ignore_errors=True)
-        raise
-    return {"suite": name, "suite_dir": str(dest), "created": True, "files": [str(dest / "suite.json"), str(dest / "cases.jsonl"), str(dest / "fixtures")]}
-
-
 def command_suite_add(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["suite"])
     args = list(parsed.positionals)
@@ -671,55 +550,6 @@ def command_suite_add(argv: list[str], json_mode: bool, started: float) -> int:
         raise EvalctlError("E_CASE_INVALID", "suite command requires: suite add <name>", "try: evalctl suite add demo --runner-argv \"python3 $EVALCTL_WORKSPACE/r.py\" --json", 1)
     data = suite_add_data(args[2], runner_from_authoring_flags(argv, parsed=parsed))
     return print_envelope(data, json_mode=json_mode, human=f"{'Created' if data['created'] else 'Exists'} suite {data['suite']}", started=started)
-
-
-def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: str | None = None,
-                  diff_raw: str | None = None, expect_raw: str | dict[str, Any] | None = None) -> dict[str, Any]:
-    suite_dir = resolve_suite(suite_name)
-    suite = read_json(suite_dir / "suite.json")
-    workspace = normalize_suite_rel(workspace_raw, field="--workspace")
-    if not (suite_dir / workspace).exists():
-        raise EvalctlError("E_CASE_INVALID", f"workspace missing: {workspace}", "create the fixture before adding the case", 1)
-    case: dict[str, Any] = {"task": task, "workspace": workspace}
-    if diff_raw:
-        diff = normalize_suite_rel(diff_raw, field="--diff")
-        if not (suite_dir / diff).exists():
-            raise EvalctlError("E_CASE_INVALID", f"diff missing: {diff}", "create the diff file before adding the case", 1)
-        case["diff"] = diff
-    if expect_raw is not None:
-        if isinstance(expect_raw, dict):
-            expect = expect_raw
-        else:
-            try:
-                expect = json.loads(expect_raw)
-            except json.JSONDecodeError as exc:
-                raise EvalctlError("E_CASE_INVALID", f"--expect-json is invalid JSON: {exc.msg}", "provide a JSON object such as '{\"exact\":\"ok\"}'", 1)
-            if not isinstance(expect, dict):
-                raise EvalctlError("E_CASE_INVALID", "--expect-json must be a JSON object", "provide scorer expectations as an object", 1)
-        case["expect"] = expect
-    final_id = case_id or sha256_text(stable_json(case))[7:19]
-    if not is_safe_id(final_id):
-        raise EvalctlError("E_CASE_INVALID", f"invalid case id: {final_id}", "use a path-safe id", 1)
-    case["id"] = final_id
-    cases_path = suite_dir / suite.get("cases", "cases.jsonl")
-    existing_cases = load_cases(cases_path)
-    for existing in existing_cases:
-        if existing["id"] == final_id:
-            if stable_json(existing) == stable_json(case):
-                return {"suite": suite.get("name", suite_dir.name), "id": final_id, "created": False, "case": case}
-            raise EvalctlError("E_RUN_CONFLICT", f"case id already exists with different content: {final_id}", "choose a new --id or edit cases.jsonl explicitly", 5)
-    old_text = cases_path.read_text()
-    new_text = old_text
-    if new_text and not new_text.endswith("\n"):
-        new_text += "\n"
-    new_text += stable_json(case) + "\n"
-    _atomic_write(cases_path, new_text)
-    try:
-        validate_suite(suite_dir)
-    except Exception:
-        _atomic_write(cases_path, old_text)
-        raise
-    return {"suite": suite.get("name", suite_dir.name), "id": final_id, "created": True, "case": case}
 
 
 def command_case_add(argv: list[str], json_mode: bool, started: float) -> int:
@@ -777,34 +607,6 @@ def command_scorer_config(argv: list[str], parsed: ParsedArgs | None = None) -> 
     if timeout is not None:
         config["timeout_seconds"] = timeout
     return config
-
-
-def scorer_key(config: dict[str, Any]) -> tuple[str, str]:
-    if config["name"] == "command":
-        return ("command", str(config.get("id", "")))
-    return ("builtin", config["name"])
-
-
-def scorer_add_data(suite_name: str, config: dict[str, Any]) -> dict[str, Any]:
-    suite_dir = resolve_suite(suite_name)
-    suite_path = suite_dir / "suite.json"
-    suite = read_json(suite_path)
-    old_text = suite_path.read_text()
-    scorers = list(suite.get("scorers", []))
-    new_key = scorer_key(config)
-    for existing in scorers:
-        if scorer_key(existing) == new_key:
-            if stable_json(existing) == stable_json(config):
-                return {"suite": suite.get("name", suite_dir.name), "scorer": config["name"], "id": config.get("id"), "created": False}
-            raise EvalctlError("E_RUN_CONFLICT", f"scorer already exists with different config: {new_key[1]}", "choose a new id/name or edit suite.json explicitly", 5)
-    suite["scorers"] = scorers + [config]
-    write_json(suite_path, suite)
-    try:
-        validate_suite(suite_dir)
-    except Exception:
-        _atomic_write(suite_path, old_text)
-        raise
-    return {"suite": suite.get("name", suite_dir.name), "scorer": config["name"], "id": config.get("id"), "created": True}
 
 
 def command_scorer_add(argv: list[str], json_mode: bool, started: float) -> int:
@@ -1095,154 +897,6 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
     return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
 
 
-def action(command: str, rationale: str, *, is_destructive: bool = False, alternatives: list[Any] | None = None) -> dict[str, Any]:
-    return {"command": command, "rationale": rationale, "is_destructive": is_destructive, "alternatives": alternatives or []}
-
-
-def component(state: str, details: str, **extra: Any) -> dict[str, Any]:
-    data = {"state": state, "details": details}
-    data.update({k: v for k, v in extra.items() if v is not None})
-    return data
-
-
-def probe_runtime() -> dict[str, Any]:
-    ok = sys.version_info >= (3, 11)
-    return component(
-        "healthy" if ok else "degraded",
-        f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}; evalctl {__version__}",
-        observed={"python": sys.version.split()[0], "evalctl_version": __version__, "cwd_readable": os.access(Path.cwd(), os.R_OK)},
-        recommended_action=None if ok else action("python3.11 -m evalctl doctor --json", "Use Python 3.11 or newer."),
-    )
-
-
-def probe_suite_root() -> dict[str, Any]:
-    evals = Path("evals")
-    default_suite = evals / "suites" / "code-review"
-    if not evals.exists():
-        return component("degraded", "evals/ is not initialized", recommended_action=action("evalctl init --json", "Initialize the default evalctl suite."))
-    if not default_suite.exists():
-        return component("degraded", "default code-review suite is absent", recommended_action=action("evalctl init --json", "Create or restore the default suite."))
-    try:
-        validate_suite(default_suite)
-    except EvalctlError as exc:
-        return component("unhealthy", "default suite is invalid", errors=[exc.error], recommended_action=action("evalctl validate code-review --json", "Inspect suite validation errors."))
-    return component("healthy", "default suite is present and valid", observed={"suite": "code-review"})
-
-
-def probe_runs_root() -> dict[str, Any]:
-    root = runs_root()
-    if not root.exists():
-        return component("not_configured", "no runs directory exists yet", observed={"runs_root": str(root)})
-    readable = os.access(root, os.R_OK)
-    writable = os.access(root, os.W_OK)
-    if not (readable and writable):
-        return component("unhealthy", "runs directory is not readable and writable", observed={"readable": readable, "writable": writable})
-    return component("healthy", "runs directory is readable and writable", observed={"runs_root": str(root)})
-
-
-def probe_reservations(run_dirs: list[Path]) -> dict[str, Any]:
-    classified = [classify_run_dir(path) for path in run_dirs]
-    stale = [item["run_id"] for item in classified if item["state"] == "stale"]
-    live = [item["run_id"] for item in classified if item["state"] == "running"]
-    if stale:
-        recommended = action("evalctl jobs prune --json", "Remove stale reservations and orphaned run directories.")
-        if len(stale) == 1:
-            recommended["alternatives"] = [f"evalctl run --resume {stale[0]} --json"]
-        return component("degraded", "stale reservations are present", observed={"stale": stale, "live": live}, recommended_action=recommended)
-    return component("healthy", "no stale reservations found", observed={"live": live})
-
-
-def probe_spoolctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, Any]:
-    queued = [path.name for path in runs_with_queue_state(run_dirs)]
-    binary = shutil.which("spoolctl")
-    if fast:
-        state = "unknown" if binary else ("degraded" if queued else "not_configured")
-        return component(state, "fast mode used PATH-only spoolctl check", observed={"binary": binary, "queued_runs": queued})
-    if binary is None:
-        state = "degraded" if queued else "not_configured"
-        recommended = action("install spoolctl >= 0.4.1 or run without --queue spoolctl", "Queued state exists but spoolctl is absent.") if queued else None
-        return component(state, "spoolctl is not available on PATH", observed={"queued_runs": queued}, recommended_action=recommended)
-    try:
-        data = probe_spoolctl(timeout=3)
-        return component("healthy", "spoolctl is compatible", observed={"version": data.get("version") or data.get("tool_version"), "queued_runs": queued})
-    except EvalctlError as exc:
-        state = "unhealthy" if queued else "degraded"
-        return component(state, "spoolctl is present but not compatible or responsive", observed={"queued_runs": queued}, errors=[exc.error], recommended_action=action("evalctl doctor --component spoolctl --fast --json", "Use fast diagnostics or inspect spoolctl separately."))
-
-
-def probe_inferctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, Any]:
-    provenance_runs = [path.name for path in runs_with_inferctl_state(run_dirs)]
-    binary = inferctl_binary()
-    if fast:
-        return component("unknown" if binary else "not_configured", "fast mode used PATH-only inferctl check", observed={"binary": binary, "provenance_runs": provenance_runs})
-    if binary is None:
-        return component("not_configured", "inferctl is not available on PATH", observed={"provenance_runs": provenance_runs})
-    try:
-        data = inferctl_capabilities(timeout=3)
-        verbs = inferctl_verb_names(data)
-        if "preflight" not in verbs:
-            return component("degraded", "inferctl is present but lacks preflight support", observed={"contract_version": data.get("contract_version"), "verbs": sorted(verbs)}, recommended_action=action("inferctl capabilities --json", "Inspect inferctl capabilities."))
-        return component("healthy", "inferctl preflight support is available", observed={"contract_version": data.get("contract_version"), "verbs": sorted(verbs), "route_available": "route" in verbs})
-    except EvalctlError as exc:
-        return component("degraded", "inferctl is present but not compatible or responsive", errors=[exc.error], observed={"provenance_runs": provenance_runs}, recommended_action=action("evalctl doctor --component inferctl --fast --json", "Use fast diagnostics or inspect inferctl separately."))
-
-
-def probe_runner_safety() -> dict[str, Any]:
-    return component("healthy", "runner and scorer commands execute as local code; evalctl is not a sandbox", observed={"sandboxed": False}, warnings=[{"code": "W_UNSANDBOXED_RUNNER", "message": "inspect suites before running untrusted runner or scorer commands"}])
-
-
-def safe_component_probe(name: str, probe: Any) -> dict[str, Any]:
-    try:
-        return probe()
-    except EvalctlError as exc:
-        return component("unhealthy", f"{name} probe failed", errors=[exc.error])
-    except (OSError, json.JSONDecodeError, subprocess.TimeoutExpired, PermissionError) as exc:
-        return component("unhealthy", f"{name} probe failed", errors=[{"code": "E_RUNNER_FAILED", "message": str(exc)}])
-    except Exception as exc:
-        return component("unhealthy", f"{name} probe failed", errors=[{"code": "E_RUNNER_FAILED", "message": str(exc)}])
-
-
-def doctor_data(component_name: str | None, *, fast: bool) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    root = runs_root()
-    run_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name) if root.exists() else []
-    probes = {
-        "runtime": lambda: probe_runtime(),
-        "suite_root": lambda: probe_suite_root(),
-        "runs_root": lambda: probe_runs_root(),
-        "reservations": lambda: probe_reservations(run_dirs),
-        "spoolctl": lambda: probe_spoolctl_component(run_dirs, fast=fast),
-        "inferctl": lambda: probe_inferctl_component(run_dirs, fast=fast),
-        "runner_safety": lambda: probe_runner_safety(),
-    }
-    selected = [component_name] if component_name else sorted(DOCTOR_COMPONENTS)
-    components = {name: safe_component_probe(name, probes[name]) for name in selected}
-    states = [item["state"] for item in components.values()]
-    if "unhealthy" in states:
-        outcome = "unhealthy"
-    elif "degraded" in states:
-        outcome = "degraded"
-    else:
-        outcome = "healthy"
-    recommended = None
-    for item in components.values():
-        rec = item.get("recommended_action")
-        if rec and not rec.get("is_destructive"):
-            recommended = rec
-            break
-    commands = []
-    if recommended:
-        commands.append({"command": recommended["command"], "rationale": recommended["rationale"]})
-    if component_name is None:
-        commands.append({"command": "evalctl jobs list --limit 50 --json", "rationale": "Inspect local run state."})
-    data = {
-        "operation_outcome": {"kind": outcome, "health_kind": "all-clear" if outcome == "healthy" else "attention-needed"},
-        "components": components,
-        "recommended_action": recommended or action("evalctl jobs list --limit 50 --json", "Inspect local run state."),
-        "fallbacks_active": [],
-    }
-    return data, commands
-
-
 def command_doctor(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["doctor"])
     args = list(parsed.positionals)
@@ -1408,53 +1062,6 @@ def resolve_run(argv: list[str]) -> Path:
     if not (path / "manifest.json").exists():
         raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {path}", "try: evalctl run code-review --json", 1)
     return path
-
-
-def recompute_case_score(run_dir: Path, case_entry: dict[str, Any], suite: dict[str, Any]) -> dict[str, Any]:
-    case_dir = run_dir / "cases" / case_entry["id"]
-    case = read_json(case_dir / "input.json")
-    output = (case_dir / "output.txt").read_text(errors="replace")
-    runner_json = read_json(case_dir / "runner.json")
-    before = read_json(case_dir / "workspace-before.json")
-    after = read_json(case_dir / "workspace-after.json")
-    diff = diff_manifests(before, after)
-    scores = score_case(case, output, runner_json, after, diff, suite.get("scorers", []), case_dir=case_dir, execute=False, suite=suite)
-    status = "error" if runner_json.get("timed_out") or runner_json.get("spawn_failed") or any(s.get("error") for s in scores) else "pass"
-    if status != "error" and not all(s["ok"] for s in scores if s.get("required", True)):
-        status = "fail"
-    return {"case_id": case["id"], "status": status, "ok": status == "pass", "scores": scores}
-
-
-def report_data(run_dir: Path) -> dict[str, Any]:
-    manifest_doc = read_json(run_dir / "manifest.json")
-    suite = read_json(run_dir / "suite-snapshot" / "suite.json")
-    cases = []
-    for entry in sorted(manifest_doc["cases"], key=lambda c: c["id"]):
-        score = recompute_case_score(run_dir, entry, suite)
-        aggregate = sum(s["score"] for s in score["scores"]) / max(len(score["scores"]), 1)
-        cases.append({"id": score["case_id"], "status": score["status"], "ok": score["ok"], "aggregate_score": aggregate, "scores": score["scores"], "artifacts": entry["artifacts"]})
-    failures = [c for c in cases if c["status"] != "pass"]
-    failures.sort(key=lambda c: (0 if c["status"] == "error" else 1, c["aggregate_score"], c["id"]))
-    def report_score(score: dict[str, Any]) -> dict[str, Any]:
-        out = {"scorer": score["scorer"], "ok": score["ok"], "label": score["label"], "findings": score["findings"]}
-        if "id" in score:
-            out["id"] = score["id"]
-        return out
-
-    normalized = {"run": {"ok": not failures, "suite": manifest_doc["suite"]["name"], "case_count": len(cases), "status_counts": status_counts(cases)}, "failures": [{"id": f["id"], "status": f["status"], "scores": [report_score(s) for s in f["scores"]]} for f in failures], "cases": [{"id": c["id"], "status": c["status"], "ok": c["ok"]} for c in cases]}
-    return {**normalized, "run_id": manifest_doc["run_id"], "report_hash": sha256_text(stable_json(normalized))}
-
-
-def markdown_report(data: dict[str, Any]) -> str:
-    lines = [f"# evalctl report: {data['run_id']}", "", f"Status: {'pass' if data['run']['ok'] else 'fail'}", f"Report hash: `{data['report_hash']}`", "", "## Failures"]
-    if not data["failures"]:
-        lines.append("None.")
-    for failure in data["failures"]:
-        lines.append(f"- `{failure['id']}` {failure['status']}")
-        for score in failure["scores"]:
-            if not score["ok"]:
-                lines.append(f"  - {score['scorer']}: {score['label']} {score['findings']}")
-    return "\n".join(lines) + "\n"
 
 
 def command_status(argv: list[str], json_mode: bool, started: float) -> int:
