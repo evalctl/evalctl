@@ -1,0 +1,41 @@
+{
+  "commands": [],
+  "data": null,
+  "errors": [
+    {
+      "code": "E_UNKNOWN_COMMAND",
+      "corrected_command": "evalctl status --json",
+      "did_you_mean": "status",
+      "exit_code": 1,
+      "hint": "try: evalctl capabilities --json",
+      "message": "unknown command 'stauts'",
+      "valid_values": [
+        "capabilities",
+        "case",
+        "doctor",
+        "init",
+        "jobs",
+        "plan",
+        "replay",
+        "report",
+        "robot-docs",
+        "run",
+        "schema",
+        "scorer",
+        "status",
+        "suite",
+        "validate"
+      ]
+    }
+  ],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": null,
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": false,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}

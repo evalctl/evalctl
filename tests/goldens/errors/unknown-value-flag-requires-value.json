@@ -1,0 +1,39 @@
+{
+  "commands": [],
+  "data": null,
+  "errors": [
+    {
+      "code": "E_UNKNOWN_FLAG",
+      "did_you_mean": "--jobs",
+      "exit_code": 1,
+      "hint": "check the command's supported flags",
+      "message": "unknown flag '--bogus'",
+      "requires_value": true,
+      "valid_values": [
+        "--fail-on-fail",
+        "--help",
+        "--inferctl-task",
+        "--jobs",
+        "--json",
+        "--no-color",
+        "--queue",
+        "--reservation-ttl",
+        "--resume",
+        "--run-id",
+        "--slots",
+        "--timeout",
+        "--version"
+      ]
+    }
+  ],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": null,
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": false,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}

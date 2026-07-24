@@ -1,0 +1,23 @@
+{
+  "commands": [],
+  "data": null,
+  "errors": [
+    {
+      "code": "E_CASE_INVALID",
+      "exit_code": 1,
+      "flag": "--timeout",
+      "hint": "provide --timeout as a positive integer",
+      "message": "--timeout must be a positive integer (got nope)"
+    }
+  ],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": null,
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": false,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}

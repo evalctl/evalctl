@@ -19,9 +19,10 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable, Literal, Mapping
 
 from . import __version__
 
@@ -80,26 +81,123 @@ CODE_REGISTRY = {
     "W_INFERCTL_PREFLIGHT_BLOCKED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
 }
 
-VERB_NAMES = frozenset({"capabilities", "schema", "robot-docs", "init", "validate", "run", "jobs", "replay", "suite", "case", "scorer", "status", "report", "doctor", "plan"})
-SUBCOMMANDS = {
-    "jobs": frozenset({"list", "get", "prune"}),
-    "suite": frozenset({"add"}),
-    "case": frozenset({"add"}),
-    "scorer": frozenset({"add"}),
-    "robot-docs": frozenset({"guide"}),
-}
-RUN_FLAGS_WITH_VALUES = {"--jobs", "--timeout", "--run-id", "--reservation-ttl", "--queue", "--slots", "--inferctl-task"}
-RUN_BOOL_FLAGS = {"--json", "--no-color", "--fail-on-fail"}
-REPLAY_FLAGS_WITH_VALUES = {"--run-dir", "--run-id", "--suite", "--jobs", "--timeout"}
-REPLAY_BOOL_FLAGS = {"--json", "--no-color", "--failed", "--force", "--fail-on-fail"}
-JOBS_FLAGS_WITH_VALUES = {"--limit", "--cursor"}
-JOBS_BOOL_FLAGS = {"--json", "--no-color", "--yes", "--force"}
-DOCTOR_FLAGS_WITH_VALUES = {"--component"}
-DOCTOR_BOOL_FLAGS = {"--json", "--no-color", "--fast"}
-PLAN_FLAGS_WITH_VALUES = {"--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--inferctl-task"}
-PLAN_BOOL_FLAGS = {"--json", "--no-color"}
 DOCTOR_COMPONENTS = frozenset({"runtime", "suite_root", "runs_root", "reservations", "spoolctl", "inferctl", "runner_safety"})
 OPTIONAL_COMPONENT_STATES = {"not_configured", "unknown"}
+
+
+FlagKind = Literal["bool", "positive_int", "enum", "safe_id", "suite_path", "run_path", "json_text", "text"]
+
+
+@dataclass(frozen=True)
+class FlagSpec:
+    kind: FlagKind
+    choices: frozenset[str] = frozenset()
+    default: object | None = None
+    required: bool = False
+    allow_dash_value: bool = False
+    allow_empty: bool = False
+    repeatable: bool = False
+    minimum: int | None = None
+    maximum: int | None = None
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    name: str
+    description: str
+    flags: Mapping[str, FlagSpec] = field(default_factory=dict)
+    args: tuple[str, ...] = ()
+    subcommands: frozenset[str] = frozenset()
+    mutates: bool = False
+    json: bool = True
+    exit_codes: tuple[int, ...] = (0, 1)
+    mega_command: str | None = None
+    handler: Callable[[list[str], bool, float], int] | None = None
+
+
+@dataclass(frozen=True)
+class ParsedArgs:
+    positionals: tuple[str, ...]
+    values: Mapping[str, Any]
+    bools: frozenset[str]
+
+
+BOOL = FlagSpec("bool")
+GLOBAL_FLAG_SPECS = {
+    "--json": BOOL,
+    "--no-color": BOOL,
+    "--help": BOOL,
+    "--version": BOOL,
+}
+
+
+def positive_int_spec(*, maximum: int | None = None) -> FlagSpec:
+    return FlagSpec("positive_int", minimum=1, maximum=maximum)
+
+
+COMMAND_SPECS: dict[str, CommandSpec] = {
+    "capabilities": CommandSpec("capabilities", "Return the machine contract.", flags={"--json": BOOL}, exit_codes=(0,)),
+    "schema": CommandSpec("schema", "Return output schemas.", args=("verb",), flags={"--json": BOOL}),
+    "robot-docs": CommandSpec("robot-docs", "Return agent workflow guide.", args=("guide",), subcommands=frozenset({"guide"}), json=False),
+    "init": CommandSpec("init", "Scaffold evals/ tree with sample code-review suite.", flags={"--json": BOOL, "--force": BOOL}, mutates=True, exit_codes=(0, 5)),
+    "validate": CommandSpec("validate", "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", args=("suite",), flags={"--json": BOOL}),
+    "doctor": CommandSpec("doctor", "Diagnose evalctl runtime, run state, and optional integrations.", flags={"--json": BOOL, "--component": FlagSpec("text"), "--fast": BOOL}, mega_command="DIAGNOSE"),
+    "plan": CommandSpec(
+        "plan",
+        "Produce a side-effect-free execution plan.",
+        args=("suite",),
+        flags={
+            "--json": BOOL,
+            "--jobs": positive_int_spec(),
+            "--timeout": positive_int_spec(),
+            "--run-id": FlagSpec("safe_id"),
+            "--resume": FlagSpec("safe_id"),
+            "--queue": FlagSpec("enum", choices=frozenset({"spoolctl"})),
+            "--slots": positive_int_spec(),
+            "--inferctl-task": FlagSpec("safe_id"),
+        },
+        mega_command="PLAN",
+    ),
+    "run": CommandSpec(
+        "run",
+        "Run a suite and produce a portable, resumable run directory.",
+        args=("suite",),
+        flags={
+            "--json": BOOL,
+            "--jobs": positive_int_spec(),
+            "--timeout": positive_int_spec(),
+            "--run-id": FlagSpec("safe_id"),
+            "--inferctl-task": FlagSpec("safe_id"),
+            "--resume": FlagSpec("safe_id"),
+            "--queue": FlagSpec("enum", choices=frozenset({"spoolctl"})),
+            "--slots": positive_int_spec(),
+            "--reservation-ttl": positive_int_spec(),
+            "--fail-on-fail": BOOL,
+        },
+        mutates=True,
+        exit_codes=(0, 1, 3, 4, 5, 6),
+    ),
+    "jobs": CommandSpec("jobs", "Inspect and prune local run/reservation/queue state.", args=("list", "get", "prune"), subcommands=frozenset({"list", "get", "prune"}), flags={"--json": BOOL, "--yes": BOOL, "--force": BOOL, "--limit": positive_int_spec(maximum=MAX_JOBS_LIST_LIMIT), "--cursor": FlagSpec("text")}, mutates=True),
+    "replay": CommandSpec("replay", "Re-execute failed/errored cases from a source run into a linked partial run.", args=("run-id",), flags={"--json": BOOL, "--failed": BOOL, "--run-dir": FlagSpec("run_path"), "--suite": FlagSpec("suite_path"), "--run-id": FlagSpec("safe_id"), "--force": BOOL, "--jobs": positive_int_spec(), "--timeout": positive_int_spec(), "--fail-on-fail": BOOL}, mutates=True, exit_codes=(0, 1, 3, 4, 5, 6)),
+    "suite": CommandSpec("suite", "Author suites, including suite add.", args=("add", "name"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--runner-argv": FlagSpec("text"), "--runner-command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL}, mutates=True, exit_codes=(0, 1, 5)),
+    "case": CommandSpec("case", "Author cases, including case add.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
+    "scorer": CommandSpec("scorer", "Author scorers, including built-in and command scorers.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--name": FlagSpec("enum", choices=frozenset(set(BUILTIN_SCORERS) | {"command"})), "--required": BOOL, "--advisory": BOOL, "--id": FlagSpec("safe_id"), "--argv": FlagSpec("text"), "--command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL, "--timeout": positive_int_spec()}, mutates=True, exit_codes=(0, 1, 5)),
+    "status": CommandSpec("status", "Diagnose run state.", args=("run-id",), flags={"--json": BOOL, "--run-dir": FlagSpec("run_path")}),
+    "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path")}, exit_codes=(0, 1, 3)),
+}
+
+VERB_NAMES = frozenset(COMMAND_SPECS)
+SUBCOMMANDS = {name: spec.subcommands for name, spec in COMMAND_SPECS.items() if spec.subcommands}
+RUN_FLAGS_WITH_VALUES = {flag for flag, spec in COMMAND_SPECS["run"].flags.items() if spec.kind != "bool"}
+RUN_BOOL_FLAGS = {flag for flag, spec in COMMAND_SPECS["run"].flags.items() if spec.kind == "bool"}
+REPLAY_FLAGS_WITH_VALUES = {flag for flag, spec in COMMAND_SPECS["replay"].flags.items() if spec.kind != "bool"}
+REPLAY_BOOL_FLAGS = {flag for flag, spec in COMMAND_SPECS["replay"].flags.items() if spec.kind == "bool"}
+JOBS_FLAGS_WITH_VALUES = {flag for flag, spec in COMMAND_SPECS["jobs"].flags.items() if spec.kind != "bool"}
+JOBS_BOOL_FLAGS = {flag for flag, spec in COMMAND_SPECS["jobs"].flags.items() if spec.kind == "bool"}
+DOCTOR_FLAGS_WITH_VALUES = {flag for flag, spec in COMMAND_SPECS["doctor"].flags.items() if spec.kind != "bool"}
+DOCTOR_BOOL_FLAGS = {flag for flag, spec in COMMAND_SPECS["doctor"].flags.items() if spec.kind == "bool"}
+PLAN_FLAGS_WITH_VALUES = {flag for flag, spec in COMMAND_SPECS["plan"].flags.items() if spec.kind != "bool"}
+PLAN_BOOL_FLAGS = {flag for flag, spec in COMMAND_SPECS["plan"].flags.items() if spec.kind == "bool"}
 
 
 class EvalctlError(Exception):
@@ -158,7 +256,7 @@ def envelope(data: Any, *, ok: bool = True, warnings: list[dict[str, Any]] | Non
 
 
 def wants_json(argv: list[str]) -> bool:
-    return "--json" in argv or "--format" in argv and value_after(argv, "--format") == "json" or not sys.stdout.isatty()
+    return "--json" in argv or not sys.stdout.isatty()
 
 
 def value_after(argv: list[str], flag: str, default: str | None = None) -> str | None:
@@ -224,8 +322,20 @@ def unknown_flag_error(flag: str, argv: list[str], valid_flags: set[str]) -> Eva
     ctx: dict[str, Any] = {"valid_values": sorted(valid_flags)}
     if suggestion:
         ctx["did_you_mean"] = suggestion
-        corrected = [suggestion if item == flag else item for item in argv]
-        ctx["corrected_command"] = command_string(corrected)
+        flag_specs = flag_specs_for_argv(argv, valid_flags)
+        suggestion_spec = flag_specs.get(suggestion)
+        if suggestion_spec is None or suggestion_spec.kind == "bool":
+            corrected = [suggestion if item == flag else item for item in argv]
+            ctx["corrected_command"] = command_string(corrected)
+        else:
+            ctx["requires_value"] = True
+            bad_index = argv.index(flag) if flag in argv else -1
+            next_value = argv[bad_index + 1] if bad_index >= 0 and bad_index + 1 < len(argv) else None
+            registered = registered_flags_for_argv(argv, valid_flags)
+            if next_value is not None and next_value != "--" and next_value not in registered and not (next_value.startswith("--") and not suggestion_spec.allow_dash_value):
+                corrected = list(argv)
+                corrected[bad_index] = suggestion
+                ctx["corrected_command"] = command_string(corrected)
     return EvalctlError("E_UNKNOWN_FLAG", f"unknown flag '{flag}'", "check the command's supported flags", 1, **ctx)
 
 
@@ -233,6 +343,149 @@ def reject_unknown_flags(argv: list[str], stripped_args: list[str], valid_flags:
     for token in stripped_args[1:]:
         if token.startswith("--"):
             raise unknown_flag_error(token, argv, valid_flags)
+
+
+def spec_for_argv(argv: list[str]) -> CommandSpec | None:
+    return COMMAND_SPECS.get(argv[0]) if argv else None
+
+
+def flag_specs_for_argv(argv: list[str], valid_flags: set[str] | None = None) -> dict[str, FlagSpec]:
+    spec = spec_for_argv(argv)
+    flags: dict[str, FlagSpec] = dict(GLOBAL_FLAG_SPECS)
+    if spec is not None:
+        flags.update(spec.flags)
+    if valid_flags is not None:
+        flags = {flag: spec for flag, spec in flags.items() if flag in valid_flags}
+        for flag in valid_flags:
+            flags.setdefault(flag, BOOL)
+    return flags
+
+
+def registered_flags_for_argv(argv: list[str], valid_flags: set[str] | None = None) -> set[str]:
+    spec = spec_for_argv(argv)
+    flags = set(GLOBAL_FLAG_SPECS)
+    if spec is not None:
+        flags.update(spec.flags)
+    if valid_flags is not None:
+        flags.update(valid_flags)
+    return flags
+
+
+def command_parser_spec(argv: list[str], fallback: str) -> CommandSpec:
+    if argv and argv[0] in COMMAND_SPECS:
+        return COMMAND_SPECS[argv[0]]
+    return COMMAND_SPECS[fallback]
+
+
+def flag_message_name(flag: str) -> str:
+    return flag
+
+
+def missing_flag_value_error(flag: str) -> EvalctlError:
+    return EvalctlError("E_CASE_INVALID", f"{flag_message_name(flag)} requires a value", f"provide a value for {flag}", 1, flag=flag)
+
+
+def validate_flag_value(flag: str, value: str, spec: FlagSpec) -> Any:
+    if value == "" and not spec.allow_empty:
+        raise EvalctlError("E_CASE_INVALID", f"{flag} must not be empty", f"provide a value for {flag}", 1, flag=flag)
+    if spec.kind == "text":
+        return value
+    if spec.kind == "suite_path":
+        if value == "":
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must not be empty", f"provide {flag}", 1, flag=flag)
+        return value
+    if spec.kind == "run_path":
+        if value == "":
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must not be empty", f"provide {flag}", 1, flag=flag)
+        return value
+    if spec.kind == "safe_id":
+        if not is_safe_id(value):
+            raise EvalctlError("E_CASE_INVALID", f"invalid {flag} value: {value!r}", "use letters, numbers, dot, underscore, or dash, and do not start with dash", 1, flag=flag)
+        return value
+    if spec.kind == "enum":
+        if value not in spec.choices:
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must be one of {', '.join(sorted(spec.choices))} (got {value})", f"choose one of: {', '.join(sorted(spec.choices))}", 1, flag=flag, valid_values=sorted(spec.choices))
+        return value
+    if spec.kind == "positive_int":
+        try:
+            parsed = int(value)
+        except ValueError:
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must be a positive integer (got {value})", f"provide {flag} as a positive integer", 1, flag=flag)
+        minimum = spec.minimum if spec.minimum is not None else 1
+        if parsed < minimum:
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must be at least {minimum} (got {parsed})", f"provide {flag} as a positive integer", 1, flag=flag)
+        if spec.maximum is not None and parsed > spec.maximum:
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must be at most {spec.maximum} (got {parsed})", f"provide {flag} no larger than {spec.maximum}", 1, flag=flag)
+        return parsed
+    if spec.kind == "json_text":
+        try:
+            parsed_json = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise EvalctlError("E_CASE_INVALID", f"{flag} is invalid JSON: {exc.msg}", "provide a JSON object", 1, flag=flag)
+        if not isinstance(parsed_json, dict):
+            raise EvalctlError("E_CASE_INVALID", f"{flag} must be a JSON object", "provide a JSON object", 1, flag=flag)
+        return parsed_json
+    raise AssertionError(f"unsupported flag kind {spec.kind}")
+
+
+def parse_command_args(argv: list[str], spec: CommandSpec) -> ParsedArgs:
+    values: dict[str, Any] = {}
+    bools: set[str] = set()
+    positionals: list[str] = []
+    flags = {**GLOBAL_FLAG_SPECS, **dict(spec.flags)}
+    command_flags = set(flags)
+    positional_mode = False
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if positional_mode:
+            positionals.append(token)
+            i += 1
+            continue
+        if token == "--":
+            positional_mode = True
+            i += 1
+            continue
+        if token.startswith("--"):
+            flag, attached_value = (token.split("=", 1) if "=" in token else (token, None))
+            flag_spec = flags.get(flag)
+            if flag_spec is None:
+                raise unknown_flag_error(flag, argv, command_flags)
+            if flag_spec.kind == "bool":
+                if attached_value is not None:
+                    raise EvalctlError("E_CASE_INVALID", f"{flag} does not take a value", f"use {flag} without a value", 1, flag=flag)
+                bools.add(flag)
+                i += 1
+                continue
+            if attached_value is None:
+                if i + 1 >= len(argv):
+                    raise missing_flag_value_error(flag)
+                raw_value = argv[i + 1]
+                if raw_value == "--" or raw_value in flags:
+                    raise missing_flag_value_error(flag)
+                if raw_value.startswith("--") and not flag_spec.allow_dash_value:
+                    raise missing_flag_value_error(flag)
+                step = 2
+            else:
+                raw_value = attached_value
+                step = 1
+            values[flag] = validate_flag_value(flag, raw_value, flag_spec)
+            i += step
+            continue
+        positionals.append(token)
+        i += 1
+    for flag, flag_spec in spec.flags.items():
+        if flag_spec.required and flag not in values and flag not in bools:
+            raise EvalctlError("E_CASE_INVALID", f"{flag} is required", f"provide {flag}", 1, flag=flag)
+    return ParsedArgs(tuple(positionals), values, frozenset(bools))
+
+
+def parsed_value(parsed: ParsedArgs, flag: str, default: Any = None) -> Any:
+    return parsed.values.get(flag, default)
+
+
+def parsed_bool(parsed: ParsedArgs, flag: str) -> bool:
+    return flag in parsed.bools
 
 
 def print_envelope(data: Any, *, json_mode: bool, human: str | None = None, warnings: list[dict[str, Any]] | None = None,
@@ -292,6 +545,62 @@ AGENT/AUTOMATION:
 """
 
 
+def command_help(argv: list[str], json_mode: bool, started: float) -> int:
+    if len(argv) > 1:
+        raise EvalctlError("E_CASE_INVALID", "help accepts no arguments", "try: evalctl --help", 1)
+    print(help_text())
+    return 0
+
+
+def command_version(argv: list[str], json_mode: bool, started: float) -> int:
+    if len(argv) > 1:
+        raise EvalctlError("E_CASE_INVALID", "version accepts no arguments", "try: evalctl --version", 1)
+    print(__version__)
+    return 0
+
+
+def command_capabilities(argv: list[str], json_mode: bool, started: float) -> int:
+    parsed = parse_command_args(argv, COMMAND_SPECS["capabilities"])
+    if len(parsed.positionals) != 1:
+        raise EvalctlError("E_CASE_INVALID", "capabilities accepts only flags", "try: evalctl capabilities --json", 1)
+    return print_envelope(capabilities_data(), json_mode=True, started=started)
+
+
+def command_schema(argv: list[str], json_mode: bool, started: float) -> int:
+    parsed = parse_command_args(argv, COMMAND_SPECS["schema"])
+    args = list(parsed.positionals)
+    if len(args) > 2:
+        raise EvalctlError("E_CASE_INVALID", "schema accepts at most one verb", "try: evalctl schema run --json", 1)
+    return print_envelope(schema_data(args[1] if len(args) > 1 else None), json_mode=True, started=started)
+
+
+def command_robot_docs(argv: list[str], json_mode: bool, started: float) -> int:
+    parsed = parse_command_args(argv, COMMAND_SPECS["robot-docs"])
+    args = list(parsed.positionals)
+    if len(args) > 1 and args[1] == "guide":
+        if len(args) != 2:
+            raise EvalctlError("E_CASE_INVALID", "robot-docs guide accepts no extra arguments", "try: evalctl robot-docs guide", 1)
+        print(robot_docs(), end="")
+        return 0
+    raise unknown_subcommand_error("robot-docs", args[1] if len(args) > 1 else None, argv)
+
+
+def capabilities_entry_from_spec(spec: CommandSpec) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "description": spec.description,
+        "json": spec.json,
+        "mutates": spec.mutates,
+        "exit_codes": list(spec.exit_codes),
+    }
+    if spec.args:
+        entry["args"] = list(spec.args)
+    if spec.flags:
+        entry["flags"] = list(spec.flags)
+    if spec.mega_command is not None:
+        entry["mega_command"] = spec.mega_command
+    return entry
+
+
 def capabilities_data() -> dict[str, Any]:
     try:
         spool = probe_spoolctl()
@@ -310,23 +619,7 @@ def capabilities_data() -> dict[str, Any]:
         }
     except EvalctlError:
         inferctl_status = {"available": False, "planned": True}
-    verbs = {
-        "capabilities": {"description": "Return the machine contract.", "json": True, "mutates": False, "flags": ["--json"], "exit_codes": [0]},
-        "schema": {"description": "Return output schemas.", "json": True, "mutates": False, "args": ["verb"], "flags": ["--json"], "exit_codes": [0, 1]},
-        "robot-docs": {"description": "Return agent workflow guide.", "json": False, "mutates": False, "args": ["guide"], "exit_codes": [0, 1]},
-        "init": {"description": "Scaffold evals/ tree with sample code-review suite.", "json": True, "mutates": True, "flags": ["--json", "--force"], "exit_codes": [0, 5]},
-        "validate": {"description": "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json"], "exit_codes": [0, 1]},
-        "doctor": {"description": "Diagnose evalctl runtime, run state, and optional integrations.", "json": True, "mutates": False, "flags": ["--json", "--component", "--fast"], "exit_codes": [0, 1], "mega_command": "DIAGNOSE"},
-        "plan": {"description": "Produce a side-effect-free execution plan.", "json": True, "mutates": False, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--resume", "--queue", "--slots", "--inferctl-task"], "exit_codes": [0, 1], "mega_command": "PLAN"},
-        "run": {"description": "Run a suite and produce a portable, resumable run directory.", "json": True, "mutates": True, "args": ["suite"], "flags": ["--json", "--jobs", "--timeout", "--run-id", "--inferctl-task", "--resume", "--queue", "--slots", "--reservation-ttl", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
-        "jobs": {"description": "Inspect and prune local run/reservation/queue state.", "json": True, "mutates": True, "args": ["list", "get", "prune"], "flags": ["--json", "--yes", "--force", "--limit", "--cursor"], "exit_codes": [0, 1]},
-        "replay": {"description": "Re-execute failed/errored cases from a source run into a linked partial run.", "json": True, "mutates": True, "args": ["run-id"], "flags": ["--json", "--failed", "--run-dir", "--suite", "--run-id", "--force", "--jobs", "--timeout", "--fail-on-fail"], "exit_codes": [0, 1, 3, 4, 5, 6]},
-        "suite": {"description": "Author suites, including suite add.", "json": True, "mutates": True, "args": ["add", "name"], "flags": ["--json", "--runner-argv", "--runner-command", "--shell"], "exit_codes": [0, 1, 5]},
-        "case": {"description": "Author cases, including case add.", "json": True, "mutates": True, "args": ["add", "suite"], "flags": ["--json", "--task", "--workspace", "--id", "--diff", "--expect-json"], "exit_codes": [0, 1, 5]},
-        "scorer": {"description": "Author scorers, including built-in and command scorers.", "json": True, "mutates": True, "args": ["add", "suite"], "flags": ["--json", "--name", "--required", "--advisory", "--id", "--argv", "--command", "--shell", "--timeout"], "exit_codes": [0, 1, 5]},
-        "status": {"description": "Diagnose run state.", "json": True, "mutates": False, "args": ["run-id"], "flags": ["--json", "--run-dir"], "exit_codes": [0, 1]},
-        "report": {"description": "Generate markdown or JSON report from run artifacts.", "json": True, "mutates": False, "args": ["run-id"], "flags": ["--json", "--format", "--run-dir"], "exit_codes": [0, 1, 3]},
-    }
+    verbs = {name: capabilities_entry_from_spec(spec) for name, spec in COMMAND_SPECS.items()}
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
@@ -830,44 +1123,18 @@ def write_json(path: Path, data: Any) -> None:
 
 
 def parse_jobs(argv: list[str]) -> int:
-    raw = value_after(argv, "--jobs")
-    if raw is None:
-        return min(os.cpu_count() or 1, 4)
-    try:
-        jobs = int(raw)
-    except ValueError:
-        raise EvalctlError("E_CASE_INVALID", f"--jobs must be a positive integer (got {raw})", "try: evalctl run code-review --jobs 4 --json", 1)
-    if jobs < 1:
-        raise EvalctlError("E_CASE_INVALID", f"--jobs must be at least 1 (got {jobs})", "try: evalctl run code-review --jobs 1 --json", 1)
-    return jobs
+    parsed = parse_command_args(argv, command_parser_spec(argv, "run"))
+    return int(parsed_value(parsed, "--jobs", min(os.cpu_count() or 1, 4)))
 
 
 def parse_positive_int_flag(argv: list[str], flag: str, default: int) -> int:
-    raw = value_after(argv, flag)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        raise EvalctlError("E_CASE_INVALID", f"{flag} must be a positive integer (got {raw})", f"provide {flag} as a positive integer", 1)
-    if value < 1:
-        raise EvalctlError("E_CASE_INVALID", f"{flag} must be at least 1 (got {value})", f"provide {flag} as a positive integer", 1)
-    return value
+    parsed = parse_command_args(argv, command_parser_spec(argv, "run"))
+    return int(parsed_value(parsed, flag, default))
 
 
 def parse_jobs_list_limit(argv: list[str]) -> int:
-    raw = value_after(argv, "--limit")
-    if raw is None:
-        return DEFAULT_JOBS_LIST_LIMIT
-    try:
-        value = int(raw)
-    except ValueError:
-        raise EvalctlError("E_CASE_INVALID", f"--limit must be a positive integer (got {raw})", f"try: {TOOL} jobs list --limit {DEFAULT_JOBS_LIST_LIMIT} --json", 1)
-    if value < 1:
-        raise EvalctlError("E_CASE_INVALID", f"--limit must be at least 1 (got {value})", f"try: {TOOL} jobs list --limit {DEFAULT_JOBS_LIST_LIMIT} --json", 1)
-    if value > MAX_JOBS_LIST_LIMIT:
-        raise EvalctlError("E_CASE_INVALID", f"--limit must be at most {MAX_JOBS_LIST_LIMIT} (got {value})", f"try: {TOOL} jobs list --limit {MAX_JOBS_LIST_LIMIT} --json", 1)
-    return value
+    parsed = parse_command_args(argv, COMMAND_SPECS["jobs"])
+    return int(parsed_value(parsed, "--limit", DEFAULT_JOBS_LIST_LIMIT))
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
@@ -965,7 +1232,7 @@ def render_runner_arg(arg: str, env: dict[str, str]) -> str:
 
 
 def is_safe_id(value: str) -> bool:
-    return bool(value) and value not in {".", ".."} and ".." not in value and bool(SAFE_ID_RE.fullmatch(value))
+    return bool(value) and not value.startswith("-") and value not in {".", ".."} and ".." not in value and bool(SAFE_ID_RE.fullmatch(value))
 
 
 def validate_suite_name(name: str) -> None:
@@ -1382,7 +1649,7 @@ def prepare_case_workspace(suite_dir: Path, suite: dict[str, Any], case: dict[st
     warnings.extend(mw)
     write_json(case_dir / "workspace-before.json", before)
     runner = suite["runner"]
-    timeout = int(timeout_override or runner.get("timeout_seconds") or 300)
+    timeout = int(timeout_override if timeout_override is not None else runner.get("timeout_seconds") or 300)
     max_bytes = int(runner.get("max_output_bytes") or 5 * 1024 * 1024)
     env = {k: os.environ[k] for k in runner.get("env_allowlist", []) if k in os.environ}
     eval_env = {
@@ -1897,21 +2164,27 @@ def run_scorer(scorer: dict[str, Any], expect: dict[str, Any], output_text: str,
 
 
 def command_init(argv: list[str], json_mode: bool, started: float) -> int:
-    data = init_project(force=has_flag(argv, "--force"))
+    parsed = parse_command_args(argv, COMMAND_SPECS["init"])
+    if len(parsed.positionals) != 1:
+        raise EvalctlError("E_CASE_INVALID", "init accepts only flags", "try: evalctl init --json", 1)
+    data = init_project(force=parsed_bool(parsed, "--force"))
     return print_envelope(data, json_mode=json_mode, human=f"Created {data['created']} with suite {data['suite']}", started=started)
 
 
 def command_validate(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, set(), {"--json", "--no-color"})
-    suite_arg = args[1] if len(args) > 1 else "code-review"
+    parsed = parse_command_args(argv, COMMAND_SPECS["validate"])
+    if len(parsed.positionals) > 2:
+        raise EvalctlError("E_CASE_INVALID", "validate accepts at most one suite positional", "try: evalctl validate code-review --json", 1)
+    suite_arg = parsed.positionals[1] if len(parsed.positionals) > 1 else "code-review"
     data = validate_suite(resolve_suite(suite_arg))
     return print_envelope(data, json_mode=json_mode, human=f"{data['suite']}: {data['case_count']} cases valid", started=started)
 
 
-def runner_from_authoring_flags(argv: list[str], *, prefix: str = "--runner") -> dict[str, Any]:
-    argv_value = value_after(argv, f"{prefix}-argv")
-    command_value = value_after(argv, f"{prefix}-command")
-    shell = has_flag(argv, "--shell")
+def runner_from_authoring_flags(argv: list[str], *, prefix: str = "--runner", parsed: ParsedArgs | None = None) -> dict[str, Any]:
+    parsed = parsed or parse_command_args(argv, COMMAND_SPECS["suite"])
+    argv_value = parsed_value(parsed, f"{prefix}-argv")
+    command_value = parsed_value(parsed, f"{prefix}-command")
+    shell = parsed_bool(parsed, "--shell")
     if bool(argv_value) == bool(command_value):
         raise EvalctlError("E_CASE_INVALID", f"{prefix}-argv and {prefix}-command are mutually exclusive", f"try: {TOOL} suite add demo {prefix}-argv \"python3 $EVALCTL_WORKSPACE/r.py\"", 1)
     if argv_value and shell:
@@ -1966,15 +2239,16 @@ def suite_add_data(name: str, runner: dict[str, Any], *, _validator: Any = valid
 
 
 def command_suite_add(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, {"--runner-argv", "--runner-command"}, {"--json", "--no-color", "--shell"})
+    parsed = parse_command_args(argv, COMMAND_SPECS["suite"])
+    args = list(parsed.positionals)
     if len(args) != 3 or args[1] != "add":
         raise EvalctlError("E_CASE_INVALID", "suite command requires: suite add <name>", "try: evalctl suite add demo --runner-argv \"python3 $EVALCTL_WORKSPACE/r.py\" --json", 1)
-    data = suite_add_data(args[2], runner_from_authoring_flags(argv))
+    data = suite_add_data(args[2], runner_from_authoring_flags(argv, parsed=parsed))
     return print_envelope(data, json_mode=json_mode, human=f"{'Created' if data['created'] else 'Exists'} suite {data['suite']}", started=started)
 
 
 def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: str | None = None,
-                  diff_raw: str | None = None, expect_raw: str | None = None) -> dict[str, Any]:
+                  diff_raw: str | None = None, expect_raw: str | dict[str, Any] | None = None) -> dict[str, Any]:
     suite_dir = resolve_suite(suite_name)
     suite = read_json(suite_dir / "suite.json")
     workspace = normalize_suite_rel(workspace_raw, field="--workspace")
@@ -1986,13 +2260,16 @@ def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: st
         if not (suite_dir / diff).exists():
             raise EvalctlError("E_CASE_INVALID", f"diff missing: {diff}", "create the diff file before adding the case", 1)
         case["diff"] = diff
-    if expect_raw:
-        try:
-            expect = json.loads(expect_raw)
-        except json.JSONDecodeError as exc:
-            raise EvalctlError("E_CASE_INVALID", f"--expect-json is invalid JSON: {exc.msg}", "provide a JSON object such as '{\"exact\":\"ok\"}'", 1)
-        if not isinstance(expect, dict):
-            raise EvalctlError("E_CASE_INVALID", "--expect-json must be a JSON object", "provide scorer expectations as an object", 1)
+    if expect_raw is not None:
+        if isinstance(expect_raw, dict):
+            expect = expect_raw
+        else:
+            try:
+                expect = json.loads(expect_raw)
+            except json.JSONDecodeError as exc:
+                raise EvalctlError("E_CASE_INVALID", f"--expect-json is invalid JSON: {exc.msg}", "provide a JSON object such as '{\"exact\":\"ok\"}'", 1)
+            if not isinstance(expect, dict):
+                raise EvalctlError("E_CASE_INVALID", "--expect-json must be a JSON object", "provide scorer expectations as an object", 1)
         case["expect"] = expect
     final_id = case_id or sha256_text(stable_json(case))[7:19]
     if not is_safe_id(final_id):
@@ -2020,43 +2297,43 @@ def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: st
 
 
 def command_case_add(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, {"--task", "--workspace", "--id", "--diff", "--expect-json"}, {"--json", "--no-color"})
+    parsed = parse_command_args(argv, COMMAND_SPECS["case"])
+    args = list(parsed.positionals)
     if len(args) != 3 or args[1] != "add":
         raise EvalctlError("E_CASE_INVALID", "case command requires: case add <suite>", "try: evalctl case add demo --task \"do X\" --workspace fixtures/x --json", 1)
-    task = value_after(argv, "--task")
-    workspace = value_after(argv, "--workspace")
-    if not task:
+    task = parsed_value(parsed, "--task")
+    workspace = parsed_value(parsed, "--workspace")
+    if task is None:
         raise EvalctlError("E_CASE_INVALID", "case add requires --task", "provide --task text", 1)
-    if not workspace:
+    if workspace is None:
         raise EvalctlError("E_CASE_INVALID", "case add requires --workspace", "provide --workspace fixtures/name", 1)
-    data = case_add_data(args[2], task, workspace, case_id=value_after(argv, "--id"), diff_raw=value_after(argv, "--diff"), expect_raw=value_after(argv, "--expect-json"))
+    data = case_add_data(args[2], task, workspace, case_id=parsed_value(parsed, "--id"), diff_raw=parsed_value(parsed, "--diff"), expect_raw=parsed_value(parsed, "--expect-json"))
     return print_envelope(data, json_mode=json_mode, human=f"{'Added' if data['created'] else 'Exists'} case {data['id']}", started=started)
 
 
-def command_scorer_config(argv: list[str]) -> dict[str, Any]:
-    name = value_after(argv, "--name")
-    if not name:
+def command_scorer_config(argv: list[str], parsed: ParsedArgs | None = None) -> dict[str, Any]:
+    parsed = parsed or parse_command_args(argv, COMMAND_SPECS["scorer"])
+    name = parsed_value(parsed, "--name")
+    if name is None:
         raise EvalctlError("E_CASE_INVALID", "scorer add requires --name", "provide --name exact or --name command", 1)
-    if name not in set(BUILTIN_SCORERS) | {"command"}:
-        raise EvalctlError("E_CASE_INVALID", f"unknown scorer name: {name}", f"known scorers: {', '.join(BUILTIN_SCORERS)}, command", 1)
-    if has_flag(argv, "--required") and has_flag(argv, "--advisory"):
+    if parsed_bool(parsed, "--required") and parsed_bool(parsed, "--advisory"):
         raise EvalctlError("E_CASE_INVALID", "--required and --advisory are mutually exclusive", "choose one scorer requirement mode", 1)
-    required = not has_flag(argv, "--advisory")
+    required = not parsed_bool(parsed, "--advisory")
     config: dict[str, Any] = {"name": name, "required": required}
     if name != "command":
-        if any(value_after(argv, flag) for flag in ("--argv", "--command", "--timeout")) or has_flag(argv, "--shell"):
+        if any(flag in parsed.values for flag in ("--argv", "--command", "--timeout")) or parsed_bool(parsed, "--shell"):
             raise EvalctlError("E_CASE_INVALID", "built-in scorers do not accept command runner flags", "use --name command for external scorers", 1)
-        if value_after(argv, "--id"):
-            config["id"] = value_after(argv, "--id")
+        if "--id" in parsed.values:
+            config["id"] = parsed_value(parsed, "--id")
         return config
-    scorer_id = value_after(argv, "--id")
-    if not scorer_id or not is_safe_id(scorer_id):
+    scorer_id = parsed_value(parsed, "--id")
+    if scorer_id is None or not is_safe_id(scorer_id):
         raise EvalctlError("E_CASE_INVALID", "command scorer requires a path-safe --id", "use letters, numbers, dot, underscore, or dash", 1)
-    argv_value = value_after(argv, "--argv")
-    command_value = value_after(argv, "--command")
+    argv_value = parsed_value(parsed, "--argv")
+    command_value = parsed_value(parsed, "--command")
     if bool(argv_value) == bool(command_value):
         raise EvalctlError("E_CASE_INVALID", "--argv and --command are mutually exclusive for command scorers", "provide exactly one command form", 1)
-    shell = has_flag(argv, "--shell")
+    shell = parsed_bool(parsed, "--shell")
     if argv_value and shell:
         raise EvalctlError("E_CASE_INVALID", "--shell requires --command, not --argv", "drop --shell or use --command", 1)
     if command_value and not shell:
@@ -2064,21 +2341,15 @@ def command_scorer_config(argv: list[str]) -> dict[str, Any]:
     config["id"] = scorer_id
     config["shell"] = shell
     if argv_value:
-        parsed = shlex.split(argv_value)
-        if not parsed:
+        argv_parts = shlex.split(argv_value)
+        if not argv_parts:
             raise EvalctlError("E_CASE_INVALID", "--argv must not be empty", "provide at least one argv token", 1)
-        config["argv"] = parsed
+        config["argv"] = argv_parts
     else:
         config["command"] = command_value
-    timeout = value_after(argv, "--timeout")
+    timeout = parsed_value(parsed, "--timeout")
     if timeout is not None:
-        try:
-            parsed_timeout = int(timeout)
-        except ValueError:
-            raise EvalctlError("E_CASE_INVALID", f"--timeout must be an integer (got {timeout})", "provide seconds as a positive integer", 1)
-        if parsed_timeout < 1:
-            raise EvalctlError("E_CASE_INVALID", f"--timeout must be at least 1 (got {parsed_timeout})", "provide a positive timeout", 1)
-        config["timeout_seconds"] = parsed_timeout
+        config["timeout_seconds"] = timeout
     return config
 
 
@@ -2111,16 +2382,17 @@ def scorer_add_data(suite_name: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def command_scorer_add(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, {"--name", "--id", "--argv", "--command", "--timeout"}, {"--json", "--no-color", "--required", "--advisory", "--shell"})
+    parsed = parse_command_args(argv, COMMAND_SPECS["scorer"])
+    args = list(parsed.positionals)
     if len(args) != 3 or args[1] != "add":
         raise EvalctlError("E_CASE_INVALID", "scorer command requires: scorer add <suite>", "try: evalctl scorer add demo --name exact --required --json", 1)
-    data = scorer_add_data(args[2], command_scorer_config(argv))
+    data = scorer_add_data(args[2], command_scorer_config(argv, parsed))
     label = data["id"] or data["scorer"]
     return print_envelope(data, json_mode=json_mode, human=f"{'Added' if data['created'] else 'Exists'} scorer {label}", started=started)
 
 
 def timeout_seconds_for_run(suite: dict[str, Any], timeout_override: int | None) -> int:
-    return int(timeout_override or suite["runner"].get("timeout_seconds", 300))
+    return int(timeout_override if timeout_override is not None else suite["runner"].get("timeout_seconds", 300))
 
 
 def build_run_metadata(suite: dict[str, Any], suite_dir: Path, cases: list[dict[str, Any]], run_id: str,
@@ -2292,24 +2564,20 @@ def build_tracks(case_items: list[dict[str, Any]], jobs: int) -> list[dict[str, 
 
 
 def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, PLAN_FLAGS_WITH_VALUES, PLAN_BOOL_FLAGS)
-    reject_unknown_flags(argv, args, PLAN_FLAGS_WITH_VALUES | PLAN_BOOL_FLAGS)
+    parsed = parse_command_args(argv, COMMAND_SPECS["plan"])
+    args = list(parsed.positionals)
     if len(args) > 2:
         raise EvalctlError("E_CASE_INVALID", "plan accepts at most one suite positional", "try: evalctl plan code-review --json", 1)
-    resume_id = value_after(argv, "--resume")
-    run_id_arg = value_after(argv, "--run-id")
-    queue_backend = value_after(argv, "--queue")
-    slots_raw = value_after(argv, "--slots")
+    resume_id = parsed_value(parsed, "--resume")
+    run_id_arg = parsed_value(parsed, "--run-id")
+    queue_backend = parsed_value(parsed, "--queue")
+    slots_raw = parsed_value(parsed, "--slots")
     if slots_raw is not None and queue_backend is None:
         raise EvalctlError("E_CASE_INVALID", "--slots requires --queue spoolctl", "try: evalctl plan code-review --queue spoolctl --slots 4 --json", 1)
-    if queue_backend is not None and queue_backend != "spoolctl":
-        raise EvalctlError("E_CASE_INVALID", f"unsupported queue backend: {queue_backend}", "supported value: --queue spoolctl", 1)
-    inferctl_task = value_after(argv, "--inferctl-task")
-    if inferctl_task is not None and not is_safe_id(inferctl_task):
-        raise EvalctlError("E_CASE_INVALID", f"unsafe inferctl task: {inferctl_task!r}", "use letters, digits, '.', '_' or '-'", 1)
-    jobs = parse_jobs(argv)
-    slots = parse_positive_int_flag(argv, "--slots", jobs) if queue_backend == "spoolctl" else None
-    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
+    inferctl_task = parsed_value(parsed, "--inferctl-task")
+    jobs = int(parsed_value(parsed, "--jobs", min(os.cpu_count() or 1, 4)))
+    slots = int(slots_raw) if queue_backend == "spoolctl" and slots_raw is not None else jobs if queue_backend == "spoolctl" else None
+    timeout_override = parsed_value(parsed, "--timeout")
     warnings: list[dict[str, Any]] = []
     commands: list[dict[str, str]] = []
 
@@ -2419,37 +2687,33 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
 
 
 def command_run(argv: list[str], json_mode: bool, started: float) -> int:
-    resume_id = value_after(argv, "--resume")
+    parsed = parse_command_args(argv, COMMAND_SPECS["run"])
+    resume_id = parsed_value(parsed, "--resume")
     if resume_id is not None:
-        args = strip_flags(argv, RUN_FLAGS_WITH_VALUES | {"--resume"}, RUN_BOOL_FLAGS)
-        reject_unknown_flags(argv, args, RUN_FLAGS_WITH_VALUES | RUN_BOOL_FLAGS | {"--resume"})
-        return command_run_resume(argv, resume_id, json_mode, started)
-    args = strip_flags(argv, RUN_FLAGS_WITH_VALUES, RUN_BOOL_FLAGS)
-    reject_unknown_flags(argv, args, RUN_FLAGS_WITH_VALUES | RUN_BOOL_FLAGS | {"--resume"})
+        return command_run_resume(argv, resume_id, json_mode, started, parsed=parsed)
+    args = list(parsed.positionals)
     if len(args) < 2:
         raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
-    queue_backend = value_after(argv, "--queue")
-    slots_raw = value_after(argv, "--slots")
+    queue_backend = parsed_value(parsed, "--queue")
+    slots_raw = parsed_value(parsed, "--slots")
     if slots_raw is not None and queue_backend is None:
         raise EvalctlError("E_CASE_INVALID", "--slots requires --queue spoolctl", "try: evalctl run code-review --queue spoolctl --slots 4 --json", 1)
-    if queue_backend is not None and queue_backend != "spoolctl":
-        raise EvalctlError("E_CASE_INVALID", f"unsupported queue backend: {queue_backend}", "supported value: --queue spoolctl", 1)
+    jobs = int(parsed_value(parsed, "--jobs", min(os.cpu_count() or 1, 4)))
+    slots = int(slots_raw) if queue_backend == "spoolctl" and slots_raw is not None else jobs if queue_backend == "spoolctl" else None
+    reservation_ttl = int(parsed_value(parsed, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS))
+    timeout_override = parsed_value(parsed, "--timeout")
+    run_id_value = parsed_value(parsed, "--run-id")
+    inferctl_task = parsed_value(parsed, "--inferctl-task")
     if queue_backend == "spoolctl":
         probe_spoolctl()
-    inferctl_task = value_after(argv, "--inferctl-task")
-    if inferctl_task is not None and not is_safe_id(inferctl_task):
-        raise EvalctlError("E_CASE_INVALID", f"unsafe inferctl task: {inferctl_task!r}", "use letters, digits, '.', '_' or '-'", 1)
     suite_dir = resolve_suite(args[1])
     validate_suite(suite_dir)
     suite = read_json(suite_dir / "suite.json")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
-    jobs = parse_jobs(argv)
-    slots = parse_positive_int_flag(argv, "--slots", jobs) if queue_backend == "spoolctl" else None
-    reservation_ttl = parse_positive_int_flag(argv, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS)
     unsandboxed_warning = {"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}
     if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
         print(unsandboxed_warning["message"], file=sys.stderr)
-    run_id = value_after(argv, "--run-id") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ-") + suite.get("name", suite_dir.name)
+    run_id = run_id_value if run_id_value is not None else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ-") + suite.get("name", suite_dir.name)
     run_dir = Path("evals") / "runs" / run_id
     if run_dir.exists():
         manifest_path = run_dir / "manifest.json"
@@ -2467,14 +2731,14 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
         if reservation and reservation_is_live(reservation):
             raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
         raise EvalctlError("E_RUN_BUSY", f"run {run_id} is incomplete and may be resumable", f"retry with: evalctl run --resume {run_id} --json", 4)
-    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
     data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots, inferctl_task)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
-    return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
+    return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
 
 
-def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: float) -> int:
+def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: float, *, parsed: ParsedArgs | None = None) -> int:
+    parsed = parsed or parse_command_args(argv, COMMAND_SPECS["run"])
     if not is_safe_id(run_id) or "/" in run_id or "\\" in run_id:
         raise EvalctlError("E_CASE_INVALID", f"invalid run id: {run_id}", "use a simple run id with letters, numbers, dot, underscore, or dash", 1)
     run_dir = Path("evals") / "runs" / run_id
@@ -2501,7 +2765,7 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
     if reservation is not None:
         warnings.append({"code": "W_RESERVATION_RECLAIMED", "message": "reclaimed stale run reservation"})
     completed_entries, pending_cases = split_completed_and_pending(run_dir, cases)
-    reservation_ttl = parse_positive_int_flag(argv, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS)
+    reservation_ttl = int(parsed_value(parsed, "--reservation-ttl", DEFAULT_RESERVATION_TTL_SECONDS))
     jobs = int(metadata["execution"]["jobs"])
     timeout_override = int(metadata["execution"]["timeout_seconds"])
     queued = metadata["execution"].get("mode") == "queued" and metadata.get("queue", {}).get("backend") == "spoolctl"
@@ -2524,7 +2788,7 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
         clear_reservation(run_dir)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Resume {run_id}: {'pass' if run_ok else 'fail'}", warnings=dedupe_warnings(warnings), commands=commands, started=started)
-    return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
+    return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
 
 
 def runs_root() -> Path:
@@ -2783,20 +3047,20 @@ def doctor_data(component_name: str | None, *, fast: bool) -> tuple[dict[str, An
 
 
 def command_doctor(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, DOCTOR_FLAGS_WITH_VALUES, DOCTOR_BOOL_FLAGS)
-    reject_unknown_flags(argv, args, DOCTOR_FLAGS_WITH_VALUES | DOCTOR_BOOL_FLAGS)
-    component_name = value_after(argv, "--component")
+    parsed = parse_command_args(argv, COMMAND_SPECS["doctor"])
+    args = list(parsed.positionals)
+    component_name = parsed_value(parsed, "--component")
     if component_name is not None and component_name not in DOCTOR_COMPONENTS:
         raise EvalctlError("E_UNKNOWN_COMPONENT", f"unknown doctor component '{component_name}'", "choose one of the valid component names", 1, valid_values=sorted(DOCTOR_COMPONENTS))
     if len(args) != 1:
         raise EvalctlError("E_CASE_INVALID", "doctor accepts only flags", "try: evalctl doctor --json", 1)
-    data, commands = doctor_data(component_name, fast=has_flag(argv, "--fast"))
+    data, commands = doctor_data(component_name, fast=parsed_bool(parsed, "--fast"))
     return print_envelope(data, json_mode=json_mode, human=f"doctor: {data['operation_outcome']['kind']}", commands=commands, started=started)
 
 
 def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
-    args = strip_flags(argv, JOBS_FLAGS_WITH_VALUES, JOBS_BOOL_FLAGS)
-    reject_unknown_flags(argv, args, JOBS_FLAGS_WITH_VALUES | JOBS_BOOL_FLAGS)
+    parsed = parse_command_args(argv, COMMAND_SPECS["jobs"])
+    args = list(parsed.positionals)
     if len(args) < 2:
         raise EvalctlError("E_CASE_INVALID", "jobs requires list, get, or prune", "try: evalctl jobs list --json", 1)
     subcommand = args[1]
@@ -2805,8 +3069,8 @@ def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
     root = runs_root()
     run_dirs = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name) if root.exists() else []
     if subcommand == "list":
-        limit = parse_jobs_list_limit(argv)
-        cursor = value_after(argv, "--cursor")
+        limit = int(parsed_value(parsed, "--limit", DEFAULT_JOBS_LIST_LIMIT))
+        cursor = parsed_value(parsed, "--cursor")
         if cursor is None:
             page_dirs = run_dirs
         else:
@@ -2836,7 +3100,7 @@ def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
         data = classify_run_dir(run_dir)
         return print_envelope(data, json_mode=json_mode, human=f"{data['run_id']}: {data['state']}", started=started)
     if subcommand == "prune":
-        confirmed = has_flag(argv, "--yes") or has_flag(argv, "--force")
+        confirmed = parsed_bool(parsed, "--yes") or parsed_bool(parsed, "--force")
         stale = [classify_run_dir(path) for path in run_dirs if classify_run_dir(path)["state"] == "stale"]
         orphaned = [classify_run_dir(path) for path in run_dirs if classify_run_dir(path)["state"] == "orphaned"]
         refused = [classify_run_dir(path) for path in run_dirs if classify_run_dir(path)["state"] in {"completed", "running"}]
@@ -2860,11 +3124,11 @@ def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
 
 
 def parse_replay_source(argv: list[str]) -> Path:
-    args = strip_flags(argv, REPLAY_FLAGS_WITH_VALUES, REPLAY_BOOL_FLAGS)
-    reject_unknown_flags(argv, args, REPLAY_FLAGS_WITH_VALUES | REPLAY_BOOL_FLAGS)
-    if not has_flag(argv, "--failed"):
+    parsed = parse_command_args(argv, COMMAND_SPECS["replay"])
+    args = list(parsed.positionals)
+    if not parsed_bool(parsed, "--failed"):
         raise EvalctlError("E_CASE_INVALID", "replay requires --failed in v0.2", "try: evalctl replay --failed <run-id> --json", 1)
-    run_dir = value_after(argv, "--run-dir")
+    run_dir = parsed_value(parsed, "--run-dir")
     positional = args[1:] if args and args[0] == "replay" else args
     if run_dir and positional:
         raise EvalctlError("E_CASE_INVALID", "replay source must be either a run id or --run-dir, not both", "try: evalctl replay --failed <run-id> --json", 1)
@@ -2877,6 +3141,7 @@ def parse_replay_source(argv: list[str]) -> Path:
 
 
 def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
+    parsed = parse_command_args(argv, COMMAND_SPECS["replay"])
     source_run = parse_replay_source(argv)
     source_manifest = read_json(source_run / "manifest.json")
     source_report = report_data(source_run)
@@ -2886,7 +3151,7 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
         data = {"replayed_from": source_manifest["run_id"], "cases_replayed": 0}
         return print_envelope(data, json_mode=json_mode, human=f"{source_manifest['run_id']}: nothing to replay", warnings=warnings, started=started)
 
-    suite_arg = value_after(argv, "--suite") or source_manifest["suite"]["name"]
+    suite_arg = parsed_value(parsed, "--suite", source_manifest["suite"]["name"])
     try:
         suite_dir = resolve_suite(suite_arg)
     except EvalctlError as exc:
@@ -2910,15 +3175,15 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
         data = {"replayed_from": source_manifest["run_id"], "cases_replayed": 0}
         return print_envelope(data, json_mode=json_mode, human=f"{source_manifest['run_id']}: nothing to replay", warnings=warnings, started=started)
 
-    jobs = parse_jobs(argv)
-    timeout_override = int(value_after(argv, "--timeout")) if value_after(argv, "--timeout") else None
-    run_id = value_after(argv, "--run-id") or f"{source_manifest['run_id']}-replay-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')}"
+    jobs = int(parsed_value(parsed, "--jobs", min(os.cpu_count() or 1, 4)))
+    timeout_override = parsed_value(parsed, "--timeout")
+    run_id = parsed_value(parsed, "--run-id", f"{source_manifest['run_id']}-replay-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')}")
     run_dir = Path("evals") / "runs" / run_id
     if run_dir.resolve() == source_run.resolve():
         raise EvalctlError("E_RUN_CONFLICT", "replay destination must not be the source run", "use a fresh --run-id", 5)
     if run_dir.exists():
         if (run_dir / "manifest.json").exists():
-            if not has_flag(argv, "--force"):
+            if not parsed_bool(parsed, "--force"):
                 raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed; refusing to overwrite without --force", "use a fresh --run-id or pass --force", 5)
             shutil.rmtree(run_dir)
         else:
@@ -2929,7 +3194,7 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
     all_warnings = run_warnings + warnings
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "inspect replay report"}]
     print_envelope(data, json_mode=json_mode, human=f"Replay {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
-    return 6 if has_flag(argv, "--fail-on-fail") and not run_ok else 0
+    return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
 
 
 def status_counts(cases: list[dict[str, Any]]) -> dict[str, int]:
@@ -2956,11 +3221,13 @@ def manifest_identity(manifest_doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def resolve_run(argv: list[str]) -> Path:
-    run_dir = value_after(argv, "--run-dir")
-    if run_dir:
+    spec = COMMAND_SPECS["report"] if argv and argv[0] == "report" else COMMAND_SPECS["status"]
+    parsed = parse_command_args(argv, spec)
+    run_dir = parsed_value(parsed, "--run-dir")
+    if run_dir is not None:
         path = Path(run_dir)
     else:
-        args = strip_flags(argv, {"--run-dir", "--format"}, {"--json", "--no-color"})
+        args = list(parsed.positionals)
         if len(args) < 2:
             raise EvalctlError("E_RUN_NOT_FOUND", "run id or --run-dir is required", "try: evalctl status <run-id> --json", 1)
         path = Path("evals") / "runs" / args[1]
@@ -3017,6 +3284,9 @@ def markdown_report(data: dict[str, Any]) -> str:
 
 
 def command_status(argv: list[str], json_mode: bool, started: float) -> int:
+    parsed = parse_command_args(argv, COMMAND_SPECS["status"])
+    if len(parsed.positionals) > 2:
+        raise EvalctlError("E_CASE_INVALID", "status accepts at most one run positional", "try: evalctl status <run-id> --json", 1)
     run_dir = resolve_run(argv)
     manifest_doc = read_json(run_dir / "manifest.json")
     report = report_data(run_dir)
@@ -3025,9 +3295,12 @@ def command_status(argv: list[str], json_mode: bool, started: float) -> int:
 
 
 def command_report(argv: list[str], json_mode: bool, started: float) -> int:
+    parsed = parse_command_args(argv, COMMAND_SPECS["report"])
+    if len(parsed.positionals) > 2:
+        raise EvalctlError("E_CASE_INVALID", "report accepts at most one run positional", "try: evalctl report <run-id> --format json", 1)
     run_dir = resolve_run(argv)
     data = report_data(run_dir)
-    fmt = value_after(argv, "--format", "json" if json_mode else "markdown")
+    fmt = parsed_value(parsed, "--format", "json" if json_mode else "markdown")
     if fmt == "markdown" and not has_flag(argv, "--json"):
         print(markdown_report(data), end="")
         return 0
@@ -3037,28 +3310,33 @@ def command_report(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=True, commands=commands, started=started)
 
 
+def report_format_json_requested(argv: list[str]) -> bool:
+    if not argv or argv[0] != "report":
+        return False
+    for index, token in enumerate(argv):
+        if token == "--format" and index + 1 < len(argv):
+            return argv[index + 1] == "json"
+        if token == "--format=json":
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     started = time.time()
     argv = list(sys.argv[1:] if argv is None else argv)
     json_mode = wants_json(argv)
     try:
         if not argv or argv[0] in {"--help", "-h"}:
-            print(help_text())
-            return 0
+            return command_help(argv or ["--help"], json_mode, started)
         if argv[0] == "--version":
-            print(__version__)
-            return 0
+            return command_version(argv, json_mode, started)
         cmd = argv[0]
         if cmd == "capabilities":
-            return print_envelope(capabilities_data(), json_mode=True, started=started)
+            return command_capabilities(argv, json_mode, started)
         if cmd == "schema":
-            args = strip_flags(argv, set(), {"--json", "--no-color"})
-            return print_envelope(schema_data(args[1] if len(args) > 1 else None), json_mode=True, started=started)
+            return command_schema(argv, json_mode, started)
         if cmd == "robot-docs":
-            if len(argv) > 1 and argv[1] == "guide":
-                print(robot_docs(), end="")
-                return 0
-            raise unknown_subcommand_error("robot-docs", argv[1] if len(argv) > 1 else None, argv)
+            return command_robot_docs(argv, json_mode, started)
         if cmd == "init":
             return command_init(argv, json_mode, started)
         if cmd == "validate":
@@ -3091,11 +3369,11 @@ def main(argv: list[str] | None = None) -> int:
             return command_report(argv, json_mode, started)
         raise unknown_command_error(cmd, argv)
     except EvalctlError as exc:
-        return print_error(exc, json_mode=json_mode, started=started)
+        return print_error(exc, json_mode=json_mode or report_format_json_requested(argv), started=started)
     except KeyboardInterrupt:
-        return print_error(EvalctlError("E_RUNNER_FAILED", "interrupted", "retry the command", 3), json_mode=json_mode, started=started)
+        return print_error(EvalctlError("E_RUNNER_FAILED", "interrupted", "retry the command", 3), json_mode=json_mode or report_format_json_requested(argv), started=started)
     except Exception as exc:
-        return print_error(EvalctlError("E_RUNNER_FAILED", f"internal error: {exc}", "run with --json and inspect errors[0]", 3), json_mode=json_mode, started=started)
+        return print_error(EvalctlError("E_RUNNER_FAILED", f"internal error: {exc}", "run with --json and inspect errors[0]", 3), json_mode=json_mode or report_format_json_requested(argv), started=started)
 
 
 if __name__ == "__main__":

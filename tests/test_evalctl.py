@@ -257,6 +257,29 @@ class EvalctlCliTests(unittest.TestCase):
             self.assert_json_golden("schema-plan.json", self.envelope(["schema", "plan", "--json"], cwd, extra_env=env))
             self.assert_text_golden("robot-docs-guide.txt", self.run_cli(["robot-docs", "guide"], cwd, extra_env=env).stdout)
 
+    def test_normalized_error_envelope_goldens(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            env = {"PATH": "/nonexistent"}
+            self.envelope(["init", "--json"], cwd, extra_env=env)
+            self.envelope(["run", "code-review", "--run-id", "existing", "--json"], cwd, extra_env=env)
+            cases = {
+                "errors/unknown-command.json": ["stauts", "--json"],
+                "errors/unknown-bool-flag.json": ["plan", "code-review", "--jsoon"],
+                "errors/unknown-value-flag-preserve-value.json": ["run", "code-review", "--run-idd", "oops", "--json"],
+                "errors/unknown-value-flag-requires-value.json": ["run", "code-review", "--bogus", "--json"],
+                "errors/invalid-timeout.json": ["plan", "code-review", "--timeout", "nope", "--json"],
+                "errors/missing-timeout-value.json": ["run", "code-review", "--timeout", "--json"],
+                "errors/empty-string-value.json": ["run", "code-review", "--run-id", "", "--json"],
+                "errors/value-flag-followed-by-known-flag.json": ["run", "code-review", "--run-id", "--json"],
+                "errors/malformed-format.json": ["report", "existing", "--format"],
+                "errors/unknown-init-flag.json": ["init", "--forse", "--json"],
+            }
+            for name, args in cases.items():
+                with self.subTest(name=name):
+                    result = self.run_cli(args, cwd, expect=1, extra_env=env)
+                    self.assert_json_golden(name, json.loads(result.stdout))
+
     def test_coverage_subprocess_startup_records_cli_handlers(self) -> None:
         try:
             import coverage  # noqa: F401
@@ -529,6 +552,24 @@ class EvalctlCliTests(unittest.TestCase):
 
     def test_static_verb_registry_matches_capabilities(self) -> None:
         self.assertEqual(cli.VERB_NAMES, set(cli.capabilities_data()["verbs"]))
+
+    def test_command_registry_matches_capabilities_help_and_validation_sites(self) -> None:
+        caps = cli.capabilities_data()
+        self.assertEqual(set(cli.COMMAND_SPECS), set(caps["verbs"]))
+        for name, spec in cli.COMMAND_SPECS.items():
+            with self.subTest(command=name):
+                cap = caps["verbs"][name]
+                self.assertEqual(cap.get("flags", []), list(spec.flags))
+                self.assertEqual(cap.get("args", []), list(spec.args))
+                self.assertEqual(cap["mutates"], spec.mutates)
+                self.assertEqual(cap["json"], spec.json)
+                self.assertEqual(cap["exit_codes"], list(spec.exit_codes))
+                if spec.subcommands:
+                    self.assertEqual(cli.SUBCOMMANDS[name], spec.subcommands)
+        help_output = cli.help_text()
+        for name in cli.COMMAND_SPECS:
+            self.assertIn(name, help_output)
+        self.assertEqual(set(caps["global_flags"]), set(cli.GLOBAL_FLAG_SPECS))
 
     def test_capabilities_live_spoolctl_probe_can_flip_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1423,6 +1464,106 @@ class EvalctlCliTests(unittest.TestCase):
             bad_jobs = self.run_cli(["run", "code-review", "--jobs", "0", "--json"], cwd, expect=1)
             bad_jobs_payload = json.loads(bad_jobs.stdout)
             self.assertEqual(bad_jobs_payload["errors"][0]["code"], "E_CASE_INVALID")
+
+    def test_documented_invalid_input_enumeration(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "existing", "--json"], cwd)
+            runs_root = cwd / "evals" / "runs"
+
+            command_bases = {
+                "plan": ["plan", "code-review"],
+                "run": ["run", "code-review"],
+                "jobs": ["jobs", "list"],
+                "replay": ["replay", "--failed", "existing", "--run-id", "replay-dest"],
+                "suite": ["suite", "add", "demo"],
+                "case": ["case", "add", "code-review"],
+                "scorer": ["scorer", "add", "code-review"],
+                "status": ["status", "existing"],
+                "report": ["report", "existing"],
+                "doctor": ["doctor"],
+            }
+            value_flags = {
+                name: [flag for flag, spec in cli.COMMAND_SPECS[name].flags.items() if spec.kind != "bool"]
+                for name in command_bases
+            }
+
+            cases: list[tuple[str, list[str], str]] = []
+            for name, flags in value_flags.items():
+                for flag in flags:
+                    base = command_bases[name]
+                    cases.append((f"{name} {flag} missing", [*base, flag, "--json"], "E_CASE_INVALID"))
+                    cases.append((f"{name} {flag} empty", [*base, flag, "", "--json"], "E_CASE_INVALID"))
+                    cases.append((f"{name} {flag} followed by known flag", [*base, flag, "--json"], "E_CASE_INVALID"))
+            cases.extend([
+                ("unknown command", ["stauts", "--json"], "E_UNKNOWN_COMMAND"),
+                ("bad jobs limit", ["jobs", "list", "--limit", "1001", "--json"], "E_CASE_INVALID"),
+                ("bad doctor component", ["doctor", "--component", "wat", "--json"], "E_UNKNOWN_COMPONENT"),
+                ("bad report format", ["report", "existing", "--format", "xml", "--json"], "E_CASE_INVALID"),
+                ("bad scorer name", ["scorer", "add", "code-review", "--name", "wat", "--json"], "E_CASE_INVALID"),
+                ("unknown run flag", ["run", "code-review", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown init flag", ["init", "--forse", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown validate flag", ["validate", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown status flag", ["status", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown report flag", ["report", "nosuchrun", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown suite flag", ["suite", "add", "demo", "--runner-argv", "python3 r.py", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown case flag", ["case", "add", "code-review", "--id", "zz", "--task", "t", "--workspace", "fixtures", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+                ("unknown scorer flag", ["scorer", "add", "code-review", "--name", "exact", "--bogus", "--json"], "E_UNKNOWN_FLAG"),
+            ])
+
+            for label, args, code in cases:
+                with self.subTest(label=label, args=args):
+                    before_runs = sorted(path.name for path in runs_root.iterdir())
+                    result = self.run_cli(args, cwd, expect=1)
+                    payload = json.loads(result.stdout)
+                    self.assertFalse(payload["ok"])
+                    self.assertEqual(payload["errors"][0]["code"], code)
+                    self.assertNotEqual(payload["errors"][0]["code"], "E_RUNNER_FAILED")
+                    self.assertEqual(sorted(path.name for path in runs_root.iterdir()), before_runs)
+
+    def test_malformed_value_flags_are_input_errors_before_state_or_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "existing", "--json"], cwd)
+            runs_root = cwd / "evals" / "runs"
+
+            cases = [
+                (["plan", "code-review", "--timeout", "nope", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--timeout", "nope", "--json"], "E_CASE_INVALID"),
+                (["plan", "code-review", "--timeout", "0", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--timeout", "0", "--json"], "E_CASE_INVALID"),
+                (["plan", "code-review", "--timeout", "-3", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--timeout", "-3", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--jobs", "-1", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--queue", "spoolctl", "--slots", "-1", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--run-id", "existing", "--timeout", "nope", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--timeout", "--bogus", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--run-id", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--run-id", "--", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--run-id", "", "--json"], "E_CASE_INVALID"),
+                (["run", "code-review", "--resume", "--json"], "E_CASE_INVALID"),
+                (["plan", "code-review", "--run-id", "", "--json"], "E_CASE_INVALID"),
+                (["replay", "--failed", "existing", "--run-id", "bad-replay", "--timeout", "nope", "--json"], "E_CASE_INVALID"),
+                (["scorer", "add", "code-review", "--name", "command", "--id", "judge", "--argv", "python3 scorer.py", "--timeout", "nope", "--json"], "E_CASE_INVALID"),
+                (["report", "existing", "--format"], "E_CASE_INVALID"),
+                (["plan", "code-review", "--format"], "E_UNKNOWN_FLAG"),
+                (["plan", "code-review", "--format", "json", "--json"], "E_UNKNOWN_FLAG"),
+            ]
+            for args, code in cases:
+                with self.subTest(args=args):
+                    before_runs = sorted(path.name for path in runs_root.iterdir())
+                    result = self.run_cli(args, cwd, expect=1)
+                    payload = json.loads(result.stdout)
+                    self.assertFalse(payload["ok"])
+                    self.assertEqual(payload["errors"][0]["code"], code)
+                    self.assertNotEqual(payload["errors"][0]["code"], "E_RUNNER_FAILED")
+                    self.assertEqual(sorted(path.name for path in runs_root.iterdir()), before_runs)
+
+            free_text = self.envelope(["case", "add", "code-review", "--id", "dash-task", "--task", "-fix the parser", "--workspace", "fixtures/cr-pass", "--json"], cwd)
+            self.assertEqual(free_text["data"]["id"], "dash-task")
+            self.assertFalse(cli.is_safe_id("--json"))
 
     def test_did_you_mean_for_unknown_commands_subcommands_and_flags(self) -> None:
         with tempfile.TemporaryDirectory() as td:

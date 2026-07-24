@@ -1,0 +1,31 @@
+{
+  "commands": [],
+  "data": null,
+  "errors": [
+    {
+      "code": "E_UNKNOWN_FLAG",
+      "corrected_command": "evalctl init --force --json",
+      "did_you_mean": "--force",
+      "exit_code": 1,
+      "hint": "check the command's supported flags",
+      "message": "unknown flag '--forse'",
+      "valid_values": [
+        "--force",
+        "--help",
+        "--json",
+        "--no-color",
+        "--version"
+      ]
+    }
+  ],
+  "meta": {
+    "contract_version": 1,
+    "data_hash": null,
+    "elapsed_ms": "<ELAPSED_MS>",
+    "request_id": "<REQUEST_ID>",
+    "ts_iso": "<TS_ISO>"
+  },
+  "ok": false,
+  "tool_version": "<TOOL_VERSION>",
+  "warnings": []
+}
