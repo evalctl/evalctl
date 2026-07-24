@@ -4,7 +4,6 @@ import concurrent.futures
 import difflib
 import json
 import os
-import re
 import shlex
 import shutil
 import socket
@@ -74,6 +73,25 @@ from .artifacts import (
     read_json,
     render_text_diff,
     write_json,
+)
+from .inferctl import (
+    capture_inferctl_preflight,
+    inferctl_binary,
+    inferctl_capabilities,
+    inferctl_error_codes,
+    inferctl_payload_data,
+    inferctl_preflight_summary,
+    inferctl_run_context,
+    inferctl_verb_names,
+    inferctl_warning_codes,
+)
+from .spoolctl import (
+    probe_spoolctl,
+    run_spoolctl_json,
+    spoolctl_binary,
+    spoolctl_flag_names,
+    spoolctl_json,
+    version_tuple,
 )
 from .processes import run_process
 from .scoring import (
@@ -488,94 +506,6 @@ def parse_jobs_list_limit(argv: list[str]) -> int:
     return int(parsed_value(parsed, "--limit", DEFAULT_JOBS_LIST_LIMIT))
 
 
-def version_tuple(value: str) -> tuple[int, ...]:
-    parts = []
-    for item in value.split("."):
-        match = re.match(r"(\d+)", item)
-        parts.append(int(match.group(1)) if match else 0)
-    return tuple(parts)
-
-
-def spoolctl_binary() -> str:
-    path = shutil.which("spoolctl")
-    if not path:
-        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", "spoolctl is not available on PATH", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
-    return path
-
-
-def run_spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None, timeout: float | None = None) -> tuple[int, Any]:
-    allow_exit_codes = allow_exit_codes or {0}
-    try:
-        result = subprocess.run([spoolctl_binary(), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", "replace")
-        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", "replace")
-        detail = (stderr or stdout or "timed out").strip()
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl operation timed out: {detail}", "upgrade, restart, or bypass spoolctl", 3, timeout_seconds=timeout)
-    except OSError as exc:
-        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", f"could not run spoolctl: {exc}", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
-    if result.returncode == 4:
-        raise EvalctlError("E_JOB_TRANSIENT", "spoolctl reported a transient job-system failure", "retry the queued run or resume it later", 4)
-    if result.returncode not in allow_exit_codes:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl command failed: {result.stderr.strip() or result.stdout.strip()}", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl returned invalid JSON: {exc.msg}", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
-    return result.returncode, payload
-
-
-def spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None, timeout: float | None = None) -> dict[str, Any]:
-    returncode, payload = run_spoolctl_json(args, allow_exit_codes=allow_exit_codes, timeout=timeout)
-    if isinstance(payload, dict) and "ok" in payload:
-        if not payload.get("ok") and returncode != 6:
-            raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl returned an error envelope", "inspect spoolctl output or drop --queue spoolctl", 3)
-        data = payload.get("data")
-        return data if isinstance(data, dict) else {"value": data}
-    if isinstance(payload, dict):
-        return payload
-    raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl JSON output must be an object", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
-
-
-def spoolctl_flag_names(flags: Any) -> set[str]:
-    names: set[str] = set()
-    if not isinstance(flags, list):
-        return names
-    for item in flags:
-        if isinstance(item, str):
-            names.add(item)
-        elif isinstance(item, dict) and isinstance(item.get("flag"), str):
-            names.add(item["flag"])
-    return names
-
-
-def probe_spoolctl(*, timeout: float | None = None) -> dict[str, Any]:
-    _, payload = run_spoolctl_json(["capabilities", "--json"], timeout=timeout)
-    if not isinstance(payload, dict):
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities output must be a JSON object", "upgrade spoolctl to >= 0.4.1", 3)
-    is_envelope = "ok" in payload
-    if is_envelope:
-        if not payload.get("ok"):
-            raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities returned an error envelope", "inspect spoolctl output or upgrade spoolctl", 3)
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities data must be an object", "upgrade spoolctl to >= 0.4.1", 3)
-    else:
-        data = payload
-    envelope_version = str(payload.get("tool_version") or "") if is_envelope else ""
-    version = str(envelope_version or data.get("tool_version") or data.get("version") or "")
-    contract = str(data.get("contract_version") or "")
-    verbs = data.get("verbs", {})
-    add_flags = set()
-    if isinstance(verbs, dict):
-        add_info = verbs.get("add", {})
-        if isinstance(add_info, dict):
-            add_flags = spoolctl_flag_names(add_info.get("flags", []))
-    if version_tuple(version) < (0, 4, 1) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl is missing required evalctl queue capabilities", "upgrade spoolctl to >= 0.4.1", 3)
-    return {**data, "version": version} if envelope_version else data
-
-
 def render_runner_arg(arg: str, env: dict[str, str]) -> str:
     for key, value in env.items():
         arg = arg.replace(f"${key}", value)
@@ -758,145 +688,6 @@ def dedupe_warnings(warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         out.append(warning)
     return out
-
-
-def inferctl_run_context(task: str | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    if task is None:
-        return {"requested": False, "task": None, "actual_mode": "none", "capture_modes": []}, []
-    warnings: list[dict[str, Any]] = []
-    base: dict[str, Any] = {"requested": True, "task": task, "actual_mode": "none", "capture_modes": []}
-    try:
-        capabilities = inferctl_capabilities(timeout=3)
-        verbs = inferctl_verb_names(capabilities)
-    except EvalctlError as exc:
-        code = "W_INFERCTL_ABSENT" if exc.error["code"] == "E_INFERCTL_UNAVAILABLE" else "W_INFERCTL_INCOMPATIBLE"
-        warnings.append({"code": code, "message": exc.error["message"]})
-        return {**base, "available": False}, warnings
-    if "preflight" not in verbs:
-        warnings.append({"code": "W_INFERCTL_INCOMPATIBLE", "message": "inferctl is present but lacks preflight support"})
-        return {**base, "available": True, "contract_version": capabilities.get("contract_version"), "verbs": sorted(verbs)}, warnings
-    return {
-        **base,
-        "available": True,
-        "actual_mode": "preflight",
-        "capture_modes": ["preflight"],
-        "contract_version": capabilities.get("contract_version"),
-        "verbs": sorted(verbs),
-        "route_available": "route" in verbs,
-    }, warnings
-
-
-def inferctl_payload_data(payload: Any) -> dict[str, Any] | None:
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("ok") is False:
-        return payload.get("data") if isinstance(payload.get("data"), dict) else None
-    data = payload.get("data")
-    if isinstance(data, dict):
-        return data
-    return payload
-
-
-def inferctl_warning_codes(data: dict[str, Any]) -> list[str]:
-    codes: list[str] = []
-    for item in data.get("warnings", []):
-        if isinstance(item, dict) and item.get("code"):
-            codes.append(str(item["code"]))
-        elif isinstance(item, str):
-            codes.append(item)
-    return codes
-
-
-def inferctl_error_codes(payload: Any) -> list[str]:
-    if not isinstance(payload, dict):
-        return []
-    codes: list[str] = []
-    for item in payload.get("errors", []):
-        if isinstance(item, dict) and item.get("code"):
-            codes.append(str(item["code"]))
-    return codes
-
-
-def inferctl_preflight_summary(payload: Any, returncode: int) -> tuple[dict[str, Any], bool]:
-    data = inferctl_payload_data(payload) or {}
-    runnability = data.get("runnability") if isinstance(data.get("runnability"), dict) else {}
-    route = data.get("route") if isinstance(data.get("route"), dict) else {}
-    decision = data.get("route_decision")
-    if not isinstance(decision, dict):
-        decision = route.get("decision") if isinstance(route.get("decision"), dict) else {}
-    runnable = data.get("runnable", runnability.get("runnable"))
-    status = data.get("runnability_status", runnability.get("status"))
-    blocked = runnable is False or (status is not None and status not in {"runnable", "ready"})
-    summary = {
-        "returncode": returncode,
-        "runnable": runnable,
-        "runnability_status": status,
-        "ready": decision.get("ready"),
-        "selected_backend": decision.get("selected_backend"),
-        "selected_model": decision.get("selected_model"),
-        "fallback_selected": decision.get("is_fallback"),
-        "warning_codes": inferctl_warning_codes(data),
-        "error_codes": inferctl_error_codes(payload),
-    }
-    return summary, blocked
-
-
-def capture_inferctl_preflight(prepared: dict[str, Any], inferctl_context: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    if not inferctl_context.get("requested"):
-        return None, []
-    case_dir = prepared["case_dir"]
-    case_rel = f"cases/{prepared['case']['id']}"
-    provenance: dict[str, Any] = {
-        "requested": True,
-        "task": inferctl_context.get("task"),
-        "actual_mode": inferctl_context.get("actual_mode", "none"),
-        "capture_modes": inferctl_context.get("capture_modes", []),
-        "available": inferctl_context.get("available", False),
-    }
-    if inferctl_context.get("actual_mode") != "preflight":
-        return provenance, []
-
-    binary = inferctl_binary()
-    if binary is None:
-        provenance["actual_mode"] = "none"
-        write_json(case_dir / "inferctl-provenance.json", provenance)
-        provenance["provenance_artifact"] = f"{case_rel}/inferctl-provenance.json"
-        write_json(case_dir / "inferctl-provenance.json", provenance)
-        return provenance, [{"code": "W_INFERCTL_ABSENT", "message": "inferctl is not available on PATH"}]
-
-    args = [binary, "preflight", str(inferctl_context["task"]), "--prompt-file", str(prepared["task_txt"]), "--allow-fallback", "--json"]
-    started = time.time()
-    try:
-        result = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-        duration_ms = int((time.time() - started) * 1000)
-        payload = json.loads(result.stdout)
-        write_json(case_dir / "inferctl-preflight.json", payload)
-        summary, blocked = inferctl_preflight_summary(payload, result.returncode)
-        provenance.update(summary)
-        provenance.update({
-            "preflight_artifact": f"{case_rel}/inferctl-preflight.json",
-            "provenance_artifact": f"{case_rel}/inferctl-provenance.json",
-            "duration_ms": duration_ms,
-        })
-        warnings = [{"code": "W_INFERCTL_PREFLIGHT_BLOCKED", "message": "inferctl preflight reported the case is not runnable"}] if blocked else []
-    except subprocess.TimeoutExpired as exc:
-        error = {"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight timed out", "timeout_seconds": 10, "stdout": decode_subprocess_output(exc.stdout), "stderr": decode_subprocess_output(exc.stderr)}
-        write_json(case_dir / "inferctl-error.json", error)
-        provenance.update({"error_code": error["code"], "error_artifact": f"{case_rel}/inferctl-error.json", "provenance_artifact": f"{case_rel}/inferctl-provenance.json"})
-        warnings = [{"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight capture failed"}]
-    except (OSError, json.JSONDecodeError) as exc:
-        error = {"code": "W_INFERCTL_CAPTURE_FAILED", "message": f"inferctl preflight capture failed: {exc}"}
-        write_json(case_dir / "inferctl-error.json", error)
-        provenance.update({"error_code": error["code"], "error_artifact": f"{case_rel}/inferctl-error.json", "provenance_artifact": f"{case_rel}/inferctl-provenance.json"})
-        warnings = [{"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight capture failed"}]
-    except Exception as exc:
-        error = {"code": "W_INFERCTL_CAPTURE_FAILED", "message": f"unexpected inferctl preflight capture failure: {exc}"}
-        write_json(case_dir / "inferctl-error.json", error)
-        provenance.update({"error_code": error["code"], "error_artifact": f"{case_rel}/inferctl-error.json", "provenance_artifact": f"{case_rel}/inferctl-provenance.json"})
-        warnings = [{"code": "W_INFERCTL_CAPTURE_FAILED", "message": "inferctl preflight capture failed"}]
-
-    write_json(case_dir / "inferctl-provenance.json", provenance)
-    return provenance, warnings
 
 
 def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str, Any], run_dir: Path, exc: BaseException) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1911,42 +1702,6 @@ def runs_with_queue_state(run_dirs: list[Path]) -> list[Path]:
 
 def runs_with_inferctl_state(run_dirs: list[Path]) -> list[Path]:
     return [path for path in run_dirs if any((path / "cases").glob("*/inferctl-provenance.json"))]
-
-
-def inferctl_binary() -> str | None:
-    return shutil.which("inferctl")
-
-
-def inferctl_capabilities(*, timeout: float | None = 3) -> dict[str, Any]:
-    binary = inferctl_binary()
-    if binary is None:
-        raise EvalctlError("E_INFERCTL_UNAVAILABLE", "inferctl is not available on PATH", "install inferctl or omit inferctl provenance", 3)
-    try:
-        result = subprocess.run([binary, "capabilities", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl capabilities timed out", "run evalctl doctor --fast or inspect inferctl separately", 3, timeout_seconds=timeout) from exc
-    except OSError as exc:
-        raise EvalctlError("E_INFERCTL_UNAVAILABLE", f"could not run inferctl: {exc}", "install inferctl or omit inferctl provenance", 3) from exc
-    if result.returncode not in {0, 1, 3, 4, 5}:
-        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", f"inferctl capabilities failed: {result.stderr.strip() or result.stdout.strip()}", "inspect inferctl capabilities --json", 3)
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", f"inferctl returned invalid JSON: {exc.msg}", "inspect inferctl capabilities --json", 3) from exc
-    if isinstance(payload, dict) and payload.get("ok") is False:
-        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl returned an error envelope", "inspect inferctl capabilities --json", 3)
-    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
-    if not isinstance(data, dict):
-        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl capabilities data must be an object", "upgrade inferctl or omit inferctl provenance", 3)
-    return data
-
-
-def inferctl_verb_names(data: dict[str, Any]) -> set[str]:
-    verbs = data.get("verbs", [])
-    if not isinstance(verbs, list):
-        raise EvalctlError("E_INFERCTL_INCOMPATIBLE", "inferctl capabilities verbs must be a list", "upgrade inferctl or omit inferctl provenance", 3)
-    names = {item.get("name") for item in verbs if isinstance(item, dict)}
-    return {name for name in names if isinstance(name, str)}
 
 
 def probe_runtime() -> dict[str, Any]:
