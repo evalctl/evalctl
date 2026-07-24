@@ -14,7 +14,14 @@ import tomllib
 from pathlib import Path
 
 from evalctl import cli
+from evalctl import __version__ as evalctl_version
 from evalctl import artifacts
+from evalctl import spoolctl as spoolctl_module
+from evalctl import static_contract
+from evalctl import runner
+from evalctl import suite as suite_module
+from evalctl import run_state
+from evalctl.static_contract import now_iso
 from evalctl.processes import run_process
 from tests.fakes import install_fake_inferctl, install_fake_spoolctl, run_fake_tool
 
@@ -289,12 +296,12 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--queue spoolctl", docs.stdout)
 
     def test_static_verb_registry_matches_capabilities(self) -> None:
-        self.assertEqual(cli.VERB_NAMES, set(cli.capabilities_data()["verbs"]))
+        self.assertEqual(static_contract.VERB_NAMES, set(cli.capabilities_data()["verbs"]))
 
     def test_version_matches_package_metadata_shape(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text())
         version = metadata["project"]["version"]
-        self.assertEqual(cli.__version__, version)
+        self.assertEqual(evalctl_version, version)
         self.assertRegex(version, re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9_.-]+)?$"))
         with tempfile.TemporaryDirectory() as td:
             result = self.run_cli(["--version"], Path(td))
@@ -302,8 +309,8 @@ class EvalctlCliTests(unittest.TestCase):
 
     def test_command_registry_matches_capabilities_help_and_validation_sites(self) -> None:
         caps = cli.capabilities_data()
-        self.assertEqual(set(cli.COMMAND_SPECS), set(caps["verbs"]))
-        for name, spec in cli.COMMAND_SPECS.items():
+        self.assertEqual(set(static_contract.COMMAND_SPECS), set(caps["verbs"]))
+        for name, spec in static_contract.COMMAND_SPECS.items():
             with self.subTest(command=name):
                 cap = caps["verbs"][name]
                 self.assertEqual(cap.get("flags", []), list(spec.flags))
@@ -312,11 +319,11 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertEqual(cap["json"], spec.json)
                 self.assertEqual(cap["exit_codes"], list(spec.exit_codes))
                 if spec.subcommands:
-                    self.assertEqual(cli.SUBCOMMANDS[name], spec.subcommands)
-        help_output = cli.help_text()
-        for name in cli.COMMAND_SPECS:
+                    self.assertEqual(static_contract.SUBCOMMANDS[name], spec.subcommands)
+        help_output = static_contract.help_text()
+        for name in static_contract.COMMAND_SPECS:
             self.assertIn(name, help_output)
-        self.assertEqual(set(caps["global_flags"]), set(cli.GLOBAL_FLAG_SPECS))
+        self.assertEqual(set(caps["global_flags"]), set(static_contract.GLOBAL_FLAG_SPECS))
 
     def test_capabilities_live_spoolctl_probe_can_flip_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -327,13 +334,13 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
 
     def test_spoolctl_flag_names_accepts_real_and_compact_shapes(self) -> None:
-        self.assertEqual(cli.spoolctl_flag_names(["--cwd", "--env", "--max-crashes"]), {"--cwd", "--env", "--max-crashes"})
+        self.assertEqual(spoolctl_module.spoolctl_flag_names(["--cwd", "--env", "--max-crashes"]), {"--cwd", "--env", "--max-crashes"})
         self.assertEqual(
-            cli.spoolctl_flag_names([{"flag": "--cwd"}, {"flag": "--env"}, {"flag": "--max-crashes"}]),
+            spoolctl_module.spoolctl_flag_names([{"flag": "--cwd"}, {"flag": "--env"}, {"flag": "--max-crashes"}]),
             {"--cwd", "--env", "--max-crashes"},
         )
-        self.assertEqual(cli.spoolctl_flag_names([{"name": "--cwd"}, 7, None, "--env"]), {"--env"})
-        self.assertEqual(cli.spoolctl_flag_names({"flag": "--cwd"}), set())
+        self.assertEqual(spoolctl_module.spoolctl_flag_names([{"name": "--cwd"}, 7, None, "--env"]), {"--env"})
+        self.assertEqual(spoolctl_module.spoolctl_flag_names({"flag": "--cwd"}), set())
 
     def test_spoolctl_probe_accepts_real_compact_and_raw_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -815,18 +822,18 @@ class EvalctlCliTests(unittest.TestCase):
 
             live = runs / "live"
             live.mkdir(parents=True)
-            cli.write_json(live / ".reservation.json", {
+            artifacts.write_json(live / ".reservation.json", {
                 "run_id": "live",
                 "pid": 123,
                 "host": "test",
-                "started_ts": cli.now_iso(),
-                "heartbeat_ts": cli.now_iso(),
+                "started_ts": now_iso(),
+                "heartbeat_ts": now_iso(),
                 "ttl_seconds": 3600,
             })
 
             stale = runs / "stale"
             (stale / "cases" / "case-a").mkdir(parents=True)
-            cli.write_json(stale / ".reservation.json", {
+            artifacts.write_json(stale / ".reservation.json", {
                 "run_id": "stale",
                 "pid": 123,
                 "host": "test",
@@ -834,7 +841,7 @@ class EvalctlCliTests(unittest.TestCase):
                 "heartbeat_ts": "1970-01-01T00:00:00Z",
                 "ttl_seconds": 1,
             })
-            cli.write_json(stale / "cases" / "case-a" / "job.json", {"job_id": "job-1", "state": "queued"})
+            artifacts.write_json(stale / "cases" / "case-a" / "job.json", {"job_id": "job-1", "state": "queued"})
             (stale / ".spoolctl.db").write_text("queue state\n")
 
             orphaned = runs / "orphaned"
@@ -953,7 +960,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.envelope(["init", "--json"], cwd)
             stale = cwd / "evals" / "runs" / "stale"
             stale.mkdir(parents=True)
-            cli.write_json(stale / ".reservation.json", {
+            artifacts.write_json(stale / ".reservation.json", {
                 "run_id": "stale",
                 "pid": 123,
                 "host": "test",
@@ -1091,18 +1098,18 @@ class EvalctlCliTests(unittest.TestCase):
             run_dir = cwd / "evals" / "runs" / "phases"
             run_dir.mkdir(parents=True)
 
-            prepared = cli.prepare_case_workspace(suite_dir, suite, case, run_dir, None)
+            prepared = runner.prepare_case_workspace(suite_dir, suite, case, run_dir, None)
             self.assertTrue((prepared["case_dir"] / "workspace-before.json").exists())
-            runner_result = cli.execute_runner_in_process(prepared)
-            output_text, runner_json, normalize_warnings = cli.normalize_runner_artifacts(prepared, runner_result)
+            runner_result = runner.execute_runner_in_process(prepared)
+            output_text, runner_json, normalize_warnings = runner.normalize_runner_artifacts(prepared, runner_result)
             self.assertEqual(normalize_warnings, [])
             self.assertEqual(runner_json["exit_code"], 0)
-            entry, score_warnings = cli.capture_workspace_after_and_score(prepared, output_text, runner_json)
+            entry, score_warnings = runner.capture_workspace_after_and_score(prepared, output_text, runner_json)
             self.assertEqual(score_warnings, [])
             self.assertIn(entry["status"], {"pass", "fail"})
             self.assertTrue((prepared["case_dir"] / "score.json").exists())
             self.assertFalse((prepared["case_dir"] / "state.json").exists())
-            cli.write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
+            run_state.write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
             self.assertTrue((prepared["case_dir"] / "state.json").exists())
 
     def test_process_helper_covers_runner_and_scorer_lifecycle(self) -> None:
@@ -1279,7 +1286,7 @@ class EvalctlCliTests(unittest.TestCase):
                 "doctor": ["doctor"],
             }
             value_flags = {
-                name: [flag for flag, spec in cli.COMMAND_SPECS[name].flags.items() if spec.kind != "bool"]
+                name: [flag for flag, spec in static_contract.COMMAND_SPECS[name].flags.items() if spec.kind != "bool"]
                 for name in command_bases
             }
 
@@ -1357,7 +1364,7 @@ class EvalctlCliTests(unittest.TestCase):
 
             free_text = self.envelope(["case", "add", "code-review", "--id", "dash-task", "--task", "-fix the parser", "--workspace", "fixtures/cr-pass", "--json"], cwd)
             self.assertEqual(free_text["data"]["id"], "dash-task")
-            self.assertFalse(cli.is_safe_id("--json"))
+            self.assertFalse(suite_module.is_safe_id("--json"))
 
     def test_did_you_mean_for_unknown_commands_subcommands_and_flags(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1571,7 +1578,7 @@ class EvalctlCliTests(unittest.TestCase):
                     raise RuntimeError("simulated validation failure")
 
                 with self.assertRaises(RuntimeError):
-                    cli.suite_add_data("demo", cli.runner_from_authoring_flags(["suite", "add", "demo", "--runner-argv", "python3 x.py"]), _validator=fail_validator)
+                    suite_module.suite_add_data("demo", cli.runner_from_authoring_flags(["suite", "add", "demo", "--runner-argv", "python3 x.py"]), _validator=fail_validator)
                 suites_root = cwd / "evals" / "suites"
                 self.assertFalse((suites_root / "demo").exists())
                 self.assertEqual([p.name for p in suites_root.iterdir()], [])
