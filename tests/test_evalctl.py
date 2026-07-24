@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 from evalctl import cli
+from evalctl.processes import run_process
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1368,6 +1369,53 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertFalse((prepared["case_dir"] / "state.json").exists())
             cli.write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
             self.assertTrue((prepared["case_dir"] / "state.json").exists())
+
+    def test_process_helper_covers_runner_and_scorer_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            env = os.environ.copy()
+
+            success = run_process([sys.executable, "-c", "print('ok')"], shell=False, cwd=cwd, env=env, timeout=5)
+            self.assertEqual(success.exit_code, 0)
+            self.assertEqual(success.stdout, "ok\n")
+            self.assertFalse(success.timed_out)
+            self.assertFalse(success.spawn_failed)
+
+            failed = run_process([sys.executable, "-c", "import sys; sys.exit(7)"], shell=False, cwd=cwd, env=env, timeout=5)
+            self.assertEqual(failed.exit_code, 7)
+
+            missing = run_process(["evalctl-definitely-missing-helper-binary"], shell=False, cwd=cwd, env=env, timeout=5)
+            self.assertTrue(missing.spawn_failed)
+            self.assertIsNone(missing.exit_code)
+
+            stdin = run_process([sys.executable, "-c", "import sys; print(sys.stdin.read())"], shell=False, cwd=cwd, env=env, timeout=5, stdin_text="task text")
+            self.assertEqual(stdin.stdout, "task text\n")
+
+            no_stdin = run_process([sys.executable, "-c", "print('scorer-no-stdin')"], shell=False, cwd=cwd, env=env, timeout=5)
+            self.assertEqual(no_stdin.stdout, "scorer-no-stdin\n")
+
+            timeout = run_process([sys.executable, "-c", "import time; time.sleep(10)"], shell=False, cwd=cwd, env=env, timeout=0.2)
+            self.assertTrue(timeout.timed_out)
+            self.assertIsNone(timeout.exit_code)
+
+    def test_process_helper_timeout_kills_pipe_holding_grandchild(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            marker = cwd / "grandchild-survived"
+            grandchild = (
+                "import pathlib, sys, time\n"
+                "time.sleep(2)\n"
+                "pathlib.Path(sys.argv[1]).write_text('alive')\n"
+            )
+            child = (
+                "import subprocess, sys, time\n"
+                f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, sys.argv[1]])\n"
+                "time.sleep(10)\n"
+            )
+            result = run_process([sys.executable, "-c", child, str(marker)], shell=False, cwd=cwd, env=os.environ.copy(), timeout=0.2)
+            self.assertTrue(result.timed_out)
+            time.sleep(2.5)
+            self.assertFalse(marker.exists())
 
     def test_queue_spoolctl_matches_in_process_and_validates_backend(self) -> None:
         with tempfile.TemporaryDirectory() as td:

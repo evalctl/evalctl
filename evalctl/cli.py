@@ -9,7 +9,6 @@ import os
 import re
 import shlex
 import shutil
-import signal
 import socket
 import stat
 import subprocess
@@ -67,6 +66,7 @@ from .static_contract import (
     sha256_text,
     stable_json,
 )
+from .processes import run_process
 
 
 def wants_json(argv: list[str]) -> bool:
@@ -1135,56 +1135,20 @@ def execute_runner_in_process(prepared: dict[str, Any]) -> dict[str, Any]:
     runner = prepared["runner"]
     case = prepared["case"]
     eval_env = prepared["eval_env"]
-    started = time.time()
-    timed_out = False
-    spawn_failed = False
-    exit_code: int | None = None
-    signal_value: int | None = None
-    stdout = ""
-    stderr = ""
-    proc: subprocess.Popen[str] | None = None
-    try:
-        stdin = subprocess.PIPE if runner.get("stdin") == "task" else None
-        input_text = case["task"] if runner.get("stdin") == "task" else None
-        if runner.get("shell", False):
-            cmd: str | list[str] = render_runner_arg(runner["command"], eval_env)
-            proc = subprocess.Popen(cmd, shell=True, cwd=prepared["cwd"], env=prepared["env"], text=True, stdin=stdin,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        else:
-            argv = [render_runner_arg(str(a), eval_env) for a in runner["argv"]]
-            proc = subprocess.Popen(argv, shell=False, cwd=prepared["cwd"], env=prepared["env"], text=True, stdin=stdin,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        stdout, stderr = proc.communicate(input=input_text, timeout=prepared["timeout"])
-        exit_code = proc.returncode
-        if proc.returncode < 0:
-            signal_value = -proc.returncode
-    except subprocess.TimeoutExpired as exc:
-        timed_out = True
-        exit_code = None
-        if proc is not None:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            drained_stdout, drained_stderr = proc.communicate()
-        else:
-            drained_stdout, drained_stderr = "", ""
-        stdout = decode_subprocess_output(exc.stdout) + decode_subprocess_output(drained_stdout)
-        stderr = decode_subprocess_output(exc.stderr) + decode_subprocess_output(drained_stderr)
-    except OSError as exc:
-        spawn_failed = True
-        exit_code = None
-        stderr = str(exc)
-    duration_ms = int((time.time() - started) * 1000)
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "timed_out": timed_out,
-        "spawn_failed": spawn_failed,
-        "exit_code": exit_code,
-        "signal": signal_value,
-        "duration_ms": duration_ms,
-    }
+    if runner.get("shell", False):
+        cmd: str | list[str] = render_runner_arg(runner["command"], eval_env)
+        shell = True
+    else:
+        cmd = [render_runner_arg(str(a), eval_env) for a in runner["argv"]]
+        shell = False
+    return run_process(
+        cmd,
+        shell=shell,
+        cwd=prepared["cwd"],
+        env=prepared["env"],
+        timeout=prepared["timeout"],
+        stdin_text=case["task"] if runner.get("stdin") == "task" else None,
+    ).as_dict()
 
 
 def normalize_runner_artifacts(prepared: dict[str, Any], runner_result: dict[str, Any]) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
@@ -1480,50 +1444,38 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
     env.update(eval_env)
     env_values = [os.environ.get(k, "") for k in runner.get("redact_env_values", [])]
     patterns = runner.get("redact_patterns", [])
-    stdout = ""
-    stderr = ""
-    proc: subprocess.Popen[str] | None = None
-    try:
-        if scorer.get("shell", False):
-            command = scorer.get("command")
-            if not isinstance(command, str) or not command:
-                result = scorer_failure(scorer, required, "command scorer shell mode requires command")
-                write_json(verdict_path, result)
-                return result
-            cmd: str | list[str] = render_runner_arg(command, eval_env)
-            proc = subprocess.Popen(cmd, shell=True, cwd=case_dir / "workspace", env=env, text=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        else:
-            argv_raw = scorer.get("argv")
-            if not isinstance(argv_raw, list) or not argv_raw:
-                result = scorer_failure(scorer, required, "command scorer requires argv when shell:false")
-                write_json(verdict_path, result)
-                return result
-            cmd = [render_runner_arg(str(a), eval_env) for a in argv_raw]
-            proc = subprocess.Popen(cmd, shell=False, cwd=case_dir / "workspace", env=env, text=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        stdout, stderr = proc.communicate(timeout=timeout)
-        if proc.returncode != 0:
-            result = scorer_failure(scorer, required, f"command scorer exited {proc.returncode}")
-        else:
-            try:
-                raw = json.loads(stdout.strip())
-            except json.JSONDecodeError as exc:
-                result = scorer_failure(scorer, required, f"invalid command scorer JSON: {exc.msg}")
-            else:
-                result = normalize_command_verdict(raw, scorer, required)
-    except subprocess.TimeoutExpired as exc:
-        if proc is not None:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            drained_stdout, drained_stderr = proc.communicate()
-            stdout = decode_subprocess_output(exc.stdout) + decode_subprocess_output(drained_stdout)
-            stderr = decode_subprocess_output(exc.stderr) + decode_subprocess_output(drained_stderr)
+    if scorer.get("shell", False):
+        command = scorer.get("command")
+        if not isinstance(command, str) or not command:
+            result = scorer_failure(scorer, required, "command scorer shell mode requires command")
+            write_json(verdict_path, result)
+            return result
+        cmd: str | list[str] = render_runner_arg(command, eval_env)
+        shell = True
+    else:
+        argv_raw = scorer.get("argv")
+        if not isinstance(argv_raw, list) or not argv_raw:
+            result = scorer_failure(scorer, required, "command scorer requires argv when shell:false")
+            write_json(verdict_path, result)
+            return result
+        cmd = [render_runner_arg(str(a), eval_env) for a in argv_raw]
+        shell = False
+    process_result = run_process(cmd, shell=shell, cwd=case_dir / "workspace", env=env, timeout=timeout)
+    stdout = process_result.stdout
+    stderr = process_result.stderr
+    if process_result.timed_out:
         result = scorer_failure(scorer, required, f"command scorer timed out after {timeout}s")
-    except OSError as exc:
-        result = scorer_failure(scorer, required, f"command scorer spawn failed: {exc}")
+    elif process_result.spawn_failed:
+        result = scorer_failure(scorer, required, f"command scorer spawn failed: {stderr}")
+    elif process_result.exit_code != 0:
+        result = scorer_failure(scorer, required, f"command scorer exited {process_result.exit_code}")
+    else:
+        try:
+            raw = json.loads(stdout.strip())
+        except json.JSONDecodeError as exc:
+            result = scorer_failure(scorer, required, f"invalid command scorer JSON: {exc.msg}")
+        else:
+            result = normalize_command_verdict(raw, scorer, required)
     stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
     stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
     stdout, _ = apply_redaction(stdout, patterns, env_values)
