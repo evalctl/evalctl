@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 from evalctl import cli
+from evalctl import artifacts
 from evalctl.processes import run_process
 
 
@@ -1975,14 +1976,14 @@ class EvalctlCliTests(unittest.TestCase):
                 raise RuntimeError("simulated write failure")
 
             with self.assertRaises(RuntimeError):
-                cli._atomic_write(target, '{"new": true}\n', _writer=fail_after_temp_write)
+                artifacts._atomic_write(target, '{"new": true}\n', _writer=fail_after_temp_write)
 
             self.assertEqual(target.read_text(), '{"old": true}\n')
             self.assertEqual(list(Path(td).glob("*.tmp")), [])
 
             absent = Path(td) / "absent.json"
             with self.assertRaises(RuntimeError):
-                cli._atomic_write(absent, '{"new": true}\n', _writer=fail_after_temp_write)
+                artifacts._atomic_write(absent, '{"new": true}\n', _writer=fail_after_temp_write)
             self.assertFalse(absent.exists())
             self.assertEqual(list(Path(td).glob("*.tmp")), [])
 
