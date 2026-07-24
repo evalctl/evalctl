@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 from evalctl import cli
+from evalctl import commands
 from evalctl import __version__ as evalctl_version
 from evalctl import artifacts
 from evalctl import spoolctl as spoolctl_module
@@ -209,10 +210,10 @@ class EvalctlCliTests(unittest.TestCase):
             subprocess.run([sys.executable, "-m", "coverage", "combine", "--data-file", str(cov_dir / ".coverage"), str(cov_dir)], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
             result = subprocess.run([sys.executable, "-m", "coverage", "json", "-o", "-", "--data-file", str(cov_dir / ".coverage")], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
             data = json.loads(result.stdout)
-            cli_key = next((key for key in data["files"] if key.endswith("evalctl/cli.py")), None)
+            cli_key = next((key for key in data["files"] if key.endswith("evalctl/commands.py")), None)
             self.assertIsNotNone(cli_key, result.stdout)
             executed_lines = set(data["files"][cli_key]["executed_lines"])
-            command_run_line = cli.command_run.__code__.co_firstlineno
+            command_run_line = commands.command_run.__code__.co_firstlineno
             self.assertIn(command_run_line, executed_lines)
 
     def test_capabilities_and_schema_are_enveloped(self) -> None:
@@ -296,7 +297,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--queue spoolctl", docs.stdout)
 
     def test_static_verb_registry_matches_capabilities(self) -> None:
-        self.assertEqual(static_contract.VERB_NAMES, set(cli.capabilities_data()["verbs"]))
+        self.assertEqual(static_contract.VERB_NAMES, set(commands.capabilities_data()["verbs"]))
 
     def test_version_matches_package_metadata_shape(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text())
@@ -308,7 +309,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), version)
 
     def test_command_registry_matches_capabilities_help_and_validation_sites(self) -> None:
-        caps = cli.capabilities_data()
+        caps = commands.capabilities_data()
         self.assertEqual(set(static_contract.COMMAND_SPECS), set(caps["verbs"]))
         for name, spec in static_contract.COMMAND_SPECS.items():
             with self.subTest(command=name):
@@ -1578,7 +1579,7 @@ class EvalctlCliTests(unittest.TestCase):
                     raise RuntimeError("simulated validation failure")
 
                 with self.assertRaises(RuntimeError):
-                    suite_module.suite_add_data("demo", cli.runner_from_authoring_flags(["suite", "add", "demo", "--runner-argv", "python3 x.py"]), _validator=fail_validator)
+                    suite_module.suite_add_data("demo", commands.runner_from_authoring_flags(["suite", "add", "demo", "--runner-argv", "python3 x.py"]), _validator=fail_validator)
                 suites_root = cwd / "evals" / "suites"
                 self.assertFalse((suites_root / "demo").exists())
                 self.assertEqual([p.name for p in suites_root.iterdir()], [])
