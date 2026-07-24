@@ -16,6 +16,7 @@ from pathlib import Path
 from evalctl import cli
 from evalctl import artifacts
 from evalctl.processes import run_process
+from tests.fakes import install_fake_inferctl, install_fake_spoolctl, run_fake_tool
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,116 +110,6 @@ class EvalctlCliTests(unittest.TestCase):
         self.write_suite(cwd, suite)
         for case_id in ("cr-fail", "cr-pass"):
             (self.suite_path(cwd) / "fixtures" / case_id / "runner.py").write_text(runner)
-
-    def install_fake_spoolctl(self, cwd: Path, *, version: str = "0.4.2", capabilities_shape: str = "real",
-                              capability_flags: object | None = None, include_version: bool = True,
-                              data_version: str | None = None) -> Path:
-        bindir = cwd / "bin"
-        bindir.mkdir(exist_ok=True)
-        script = bindir / "spoolctl"
-        if capability_flags is None:
-            if capabilities_shape == "compact":
-                capability_flags = ["--cwd", "--env", "--max-crashes"]
-            else:
-                capability_flags = [
-                    {"flag": "--cwd", "type": "str", "default": None},
-                    {"flag": "--env", "type": "str", "default": []},
-                    {"flag": "--max-crashes", "type": "int", "default": None},
-                ]
-        script.write_text(
-            "#!/usr/bin/env python3\n"
-            "import json, os, subprocess, sys, time\n"
-            "from pathlib import Path\n"
-            f"VERSION = {version!r}\n"
-            f"CAPABILITIES_SHAPE = {capabilities_shape!r}\n"
-            f"CAPABILITY_FLAGS = {capability_flags!r}\n"
-            f"INCLUDE_VERSION = {include_version!r}\n"
-            f"DATA_VERSION = {data_version!r}\n"
-            "def emit(data, code=0):\n"
-            "    print(json.dumps({'ok': True, 'data': data}, sort_keys=True))\n"
-            "    raise SystemExit(code)\n"
-            "def emit_envelope(data, code=0, tool_version=VERSION):\n"
-            "    env = {'ok': True, 'data': data}\n"
-            "    if INCLUDE_VERSION and tool_version is not None:\n"
-            "        env['tool_version'] = tool_version\n"
-            "    print(json.dumps(env, sort_keys=True))\n"
-            "    raise SystemExit(code)\n"
-            "def load(db):\n"
-            "    p = Path(db)\n"
-            "    if not p.exists(): return {'jobs': {}, 'keys': {}}\n"
-            "    return json.loads(p.read_text())\n"
-            "def save(db, data):\n"
-            "    p = Path(db); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(data, sort_keys=True))\n"
-            "args = sys.argv[1:]\n"
-            "if args[:2] == ['capabilities', '--json']:\n"
-            "    if CAPABILITIES_SHAPE == 'sleep': time.sleep(30)\n"
-            "    if CAPABILITIES_SHAPE == 'bad-json':\n"
-            "        print('{not json'); raise SystemExit(0)\n"
-            "    if CAPABILITIES_SHAPE == 'error-envelope':\n"
-            "        print(json.dumps({'ok': False, 'errors': [{'code': 'BROKEN'}]}, sort_keys=True)); raise SystemExit(0)\n"
-            "    if CAPABILITIES_SHAPE == 'exit4':\n"
-            "        print(json.dumps({'ok': False, 'errors': [{'code': 'TRANSIENT'}]}, sort_keys=True)); raise SystemExit(4)\n"
-            "    data = {'contract_version': '1', 'verbs': {'add': {'flags': CAPABILITY_FLAGS}}}\n"
-            "    if INCLUDE_VERSION and (CAPABILITIES_SHAPE in ('compact', 'raw') or DATA_VERSION is not None):\n"
-            "        data['version'] = DATA_VERSION or VERSION\n"
-            "    if CAPABILITIES_SHAPE == 'raw':\n"
-            "        print(json.dumps(data, sort_keys=True)); raise SystemExit(0)\n"
-            "    if CAPABILITIES_SHAPE == 'compact':\n"
-            "        emit(data)\n"
-            "    emit_envelope(data)\n"
-            "cmd = args[0] if args else ''\n"
-            "if os.environ.get('FAKE_SPOOLCTL_TRANSIENT') and cmd == 'wait':\n"
-            "    print(json.dumps({'ok': False, 'errors': [{'code': 'TRANSIENT'}]})); raise SystemExit(4)\n"
-            "def val(flag):\n"
-            "    return args[args.index(flag)+1]\n"
-            "if cmd == 'add':\n"
-            "    db = val('--db'); key = val('--key'); cwd = val('--cwd'); timeout = int(val('--timeout'))\n"
-            "    sep = args.index('--'); command = args[sep+1:]\n"
-            "    env = {}\n"
-            "    i = 0\n"
-            "    while i < sep:\n"
-            "        if args[i] == '--env':\n"
-            "            k, v = args[i+1].split('=', 1); env[k] = v; i += 2\n"
-            "        else: i += 1\n"
-            "    data = load(db)\n"
-            "    if key in data['keys']:\n"
-            "        job_id = data['keys'][key]\n"
-            "    else:\n"
-            "        job_id = 'job-' + str(len(data['jobs']) + 1); data['keys'][key] = job_id\n"
-            "        data['jobs'][job_id] = {'id': job_id, 'key': key, 'cwd': cwd, 'env': env, 'command': command, 'timeout': timeout, 'state': 'queued', 'attempts': []}\n"
-            "        save(db, data)\n"
-            "    emit({'job_id': job_id, 'state': data['jobs'][job_id]['state']})\n"
-            "if cmd == 'work':\n"
-            "    db = val('--db'); data = load(db)\n"
-            "    base = Path(db).parent\n"
-            "    for job in data['jobs'].values():\n"
-            "        if job['state'] not in ('queued', 'running'): continue\n"
-            "        out = base / (job['id'] + '.stdout.txt'); err = base / (job['id'] + '.stderr.txt')\n"
-            "        env = os.environ.copy(); env.update(job['env'])\n"
-            "        start = time.time()\n"
-            "        try:\n"
-            "            res = subprocess.run(job['command'], cwd=job['cwd'], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=job['timeout'])\n"
-            "            out.write_text(res.stdout); err.write_text(res.stderr)\n"
-            "            state = 'succeeded' if res.returncode == 0 else 'failed'; exit_code = res.returncode; error = None\n"
-            "        except subprocess.TimeoutExpired as exc:\n"
-            "            out.write_text((exc.stdout or '') if isinstance(exc.stdout, str) else (exc.stdout or b'').decode('utf-8', 'replace'))\n"
-            "            err.write_text((exc.stderr or '') if isinstance(exc.stderr, str) else (exc.stderr or b'').decode('utf-8', 'replace'))\n"
-            "            state = 'timed_out'; exit_code = None; error = 'timed out'\n"
-            "        except OSError as exc:\n"
-            "            out.write_text(''); err.write_text(str(exc)); state = 'failed'; exit_code = None; error = 'spawn failed: ' + str(exc)\n"
-            "        job['state'] = state\n"
-            "        job['attempts'] = [{'state': state, 'exit_code': exit_code, 'error': error, 'stdout_path': str(out), 'stderr_path': str(err), 'duration_ms': int((time.time()-start)*1000)}]\n"
-            "    save(db, data); emit({'drained': True})\n"
-            "if cmd == 'wait':\n"
-            "    db = val('--db'); data = load(db); ids = [a for a in args[args.index('--json')+1:] if not a.startswith('--')]\n"
-            "    all_succeeded = all(data['jobs'][j]['state'] == 'succeeded' for j in ids)\n"
-            "    emit({'all_succeeded': all_succeeded, 'jobs': [data['jobs'][j] for j in ids]}, 0 if all_succeeded else 6)\n"
-            "if cmd == 'show':\n"
-            "    db = val('--db'); job_id = args[-1]; emit(load(db)['jobs'][job_id])\n"
-            "print('bad fake spoolctl invocation', args, file=sys.stderr); raise SystemExit(2)\n"
-        )
-        script.chmod(0o755)
-        return bindir
 
     def normalize_envelope_semantic_meta(self, payload: dict) -> dict:
         normalized = json.loads(json.dumps(payload))
@@ -316,163 +207,6 @@ class EvalctlCliTests(unittest.TestCase):
             executed_lines = set(data["files"][cli_key]["executed_lines"])
             command_run_line = cli.command_run.__code__.co_firstlineno
             self.assertIn(command_run_line, executed_lines)
-
-    def install_fake_inferctl(self, cwd: Path, *, capabilities_shape: str = "compatible",
-                              preflight_mode: str = "success", route_mode: str = "success",
-                              envelope_shape: bool = True) -> Path:
-        bindir = cwd / "bin"
-        bindir.mkdir(exist_ok=True)
-        script = bindir / "inferctl"
-        # Shapes copied from inferctl v0.2 contract goldens:
-        # internal/contract/capabilities.golden.json and testdata/contract/{preflight,route}.golden.json.
-        capabilities = {
-            "tool": "inferctl",
-            "binary": "inferctl",
-            "contract_version": "0.2",
-            "features": ["json_envelope", "contract_goldens", "mega_command_plan"],
-            "global_flags": {
-                "--help": {"type": "bool", "default": False, "description": "Show terse human help."},
-                "--json": {"type": "bool", "default": False, "description": "Emit the universal JSON envelope."},
-            },
-            "verbs": [
-                {
-                    "name": "route",
-                    "summary": "Compute and explain a route for a configured task.",
-                    "mega_command": "PLAN",
-                    "flags": [
-                        {"name": "--prompt-file", "type": "string", "default": None},
-                        {"name": "--prompt", "type": "string", "default": None},
-                        {"name": "--from-stdin", "type": "bool", "default": False},
-                        {"name": "--json", "type": "bool", "default": False},
-                    ],
-                    "args": [{"name": "task", "required": True}],
-                    "exit_codes": [0, 1, 3, 4],
-                    "output_schema_ref": "#/schemas/route_explanation",
-                    "emits_data_on_failure": False,
-                },
-                {
-                    "name": "preflight",
-                    "summary": "Decide whether automation may attempt a configured task.",
-                    "mega_command": "TASK_READINESS",
-                    "flags": [
-                        {"name": "--prompt-file", "type": "string", "default": None},
-                        {"name": "--prompt", "type": "string", "default": None},
-                        {"name": "--from-stdin", "type": "bool", "default": False},
-                        {"name": "--allow-fallback", "type": "bool", "default": False},
-                        {"name": "--require-ready", "type": "bool", "default": False},
-                        {"name": "--json", "type": "bool", "default": False},
-                    ],
-                    "args": [{"name": "task", "required": True}],
-                    "exit_codes": [0, 1, 3, 4, 5],
-                    "output_schema_ref": "#/schemas/preflight_report",
-                    "emits_data_on_failure": True,
-                },
-            ],
-        }
-        route = {
-            "task": "code",
-            "input": {"prompt_chars": 0, "estimated_tokens": 0, "source": "none"},
-            "decision": {
-                "selected_model": "qwen3:8b",
-                "selected_backend": "ollama",
-                "is_fallback": False,
-                "fallback_index": None,
-                "ready": True,
-                "estimated_first_token_ms": None,
-                "estimated_total_ms": None,
-                "reason": "primary model is available",
-            },
-            "candidates": [
-                {
-                    "model": "qwen3:8b",
-                    "backend": "ollama",
-                    "role": "primary",
-                    "fallback_index": None,
-                    "available": True,
-                    "unavailability_reason": None,
-                    "loaded": True,
-                    "estimated_first_token_ms": None,
-                }
-            ],
-            "constraints": {
-                "profile": "default_local_workstation",
-                "max_context_tokens": 8192,
-                "context_used_tokens": 0,
-                "context_pct": 0,
-                "max_concurrent_models": 1,
-                "current_loaded_count": 1,
-                "allow_premium": False,
-                "selected_is_premium": None,
-            },
-        }
-        preflight = {
-            "policy": {"allow_fallback": False, "require_ready": False},
-            "preflight_schema_version": "0.1",
-            "prompt": {"source_kind": "none", "source": "none", "prompt_chars": 0, "estimated_tokens": 0},
-            "recommended_action": {
-                "command": "inferctl route code --json",
-                "rationale": "Review the underlying route candidates and constraints",
-                "alternatives": [{"command": "inferctl backends --filter ollama --json", "rationale": "Check reachability"}],
-            },
-            "route": route,
-            "route_decision": route["decision"],
-            "runnability": {"status": "runnable", "runnable": True, "exit_code": 0, "reason": "route satisfies preflight policy"},
-            "runnability_status": "runnable",
-            "runnable": True,
-            "summary": {"status": "runnable", "message": "route satisfies preflight policy"},
-            "warnings": [],
-        }
-        script.write_text(
-            "#!/usr/bin/env python3\n"
-            "import json, sys, time\n"
-            f"CAPABILITIES = {capabilities!r}\n"
-            f"PREFLIGHT = {preflight!r}\n"
-            f"ROUTE = {route!r}\n"
-            f"CAPABILITIES_SHAPE = {capabilities_shape!r}\n"
-            f"PREFLIGHT_MODE = {preflight_mode!r}\n"
-            f"ROUTE_MODE = {route_mode!r}\n"
-            f"ENVELOPE_SHAPE = {envelope_shape!r}\n"
-            "def emit(data, code=0):\n"
-            "    print(json.dumps({'ok': True, 'data': data}, sort_keys=True) if ENVELOPE_SHAPE else json.dumps(data, sort_keys=True))\n"
-            "    raise SystemExit(code)\n"
-            "args = sys.argv[1:]\n"
-            "if args[:2] == ['capabilities', '--json']:\n"
-            "    if CAPABILITIES_SHAPE == 'invalid-json': print('{not json'); raise SystemExit(0)\n"
-            "    data = dict(CAPABILITIES)\n"
-            "    if CAPABILITIES_SHAPE == 'missing-preflight': data['verbs'] = [v for v in data['verbs'] if v['name'] != 'preflight']\n"
-            "    if CAPABILITIES_SHAPE == 'preflight-only': data['verbs'] = [v for v in data['verbs'] if v['name'] != 'route']\n"
-            "    if CAPABILITIES_SHAPE == 'error-envelope': print(json.dumps({'ok': False, 'errors': [{'code': 'BROKEN'}]}, sort_keys=True)); raise SystemExit(0)\n"
-            "    emit(data)\n"
-            "if args and args[0] == 'preflight':\n"
-            "    if PREFLIGHT_MODE == 'hang': time.sleep(30)\n"
-            "    if PREFLIGHT_MODE == 'invalid-json': print('{not json'); raise SystemExit(0)\n"
-            "    data = dict(PREFLIGHT)\n"
-            "    if PREFLIGHT_MODE == 'nonzero-with-data':\n"
-            "        data['runnability'] = {'status': 'config_error', 'runnable': False, 'exit_code': 3, 'reason': 'configuration unavailable'}\n"
-            "        data['runnability_status'] = 'config_error'; data['runnable'] = False; data['summary'] = {'status': 'config_error', 'message': 'configuration unavailable'}\n"
-            "        emit(data, 3)\n"
-            "    if PREFLIGHT_MODE == 'policy-blocked':\n"
-            "        data['runnability'] = {'status': 'policy_blocked', 'runnable': False, 'exit_code': 5, 'reason': 'policy blocked route'}\n"
-            "        data['runnability_status'] = 'policy_blocked'; data['runnable'] = False; data['summary'] = {'status': 'policy_blocked', 'message': 'policy blocked route'}\n"
-            "        emit(data, 5)\n"
-            "    if PREFLIGHT_MODE == 'fallback':\n"
-            "        data['route_decision'] = dict(data['route_decision']); data['route_decision']['is_fallback'] = True\n"
-            "        data['route'] = dict(data['route']); data['route']['decision'] = data['route_decision']\n"
-            "        emit(data)\n"
-            "    emit(data)\n"
-            "if args and args[0] == 'route':\n"
-            "    if ROUTE_MODE == 'nonzero-without-data': print('route failed', file=sys.stderr); raise SystemExit(3)\n"
-            "    if ROUTE_MODE == 'invalid-json': print('{not json'); raise SystemExit(0)\n"
-            "    emit(ROUTE)\n"
-            "print('bad fake inferctl invocation', args, file=sys.stderr); raise SystemExit(2)\n"
-        )
-        script.chmod(0o755)
-        return bindir
-
-    def run_fake_tool(self, bindir: Path, binary: str, args: list[str], expect: int = 0) -> dict:
-        result = subprocess.run([str(bindir / binary), *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(result.returncode, expect, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
-        return json.loads(result.stdout)
 
     def test_capabilities_and_schema_are_enveloped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -587,7 +321,7 @@ class EvalctlCliTests(unittest.TestCase):
     def test_capabilities_live_spoolctl_probe_can_flip_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd)
+            bindir = install_fake_spoolctl(cwd)
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertTrue(caps["data"]["integrations"]["spoolctl"]["available"])
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
@@ -604,26 +338,26 @@ class EvalctlCliTests(unittest.TestCase):
     def test_spoolctl_probe_accepts_real_compact_and_raw_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd, capabilities_shape="real")
+            bindir = install_fake_spoolctl(cwd, capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd, version="0.4.1", capabilities_shape="compact")
+            bindir = install_fake_spoolctl(cwd, version="0.4.1", capabilities_shape="compact")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.1")
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="raw")
+            bindir = install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="raw")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
 
     def test_spoolctl_probe_envelope_version_is_authoritative(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="real", data_version="9.9.9")
+            bindir = install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="real", data_version="9.9.9")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
 
@@ -641,7 +375,7 @@ class EvalctlCliTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs):
                 with tempfile.TemporaryDirectory() as td:
                     cwd = Path(td)
-                    bindir = self.install_fake_spoolctl(cwd, **kwargs)
+                    bindir = install_fake_spoolctl(cwd, **kwargs)
                     caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
                     self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
 
@@ -660,36 +394,36 @@ class EvalctlCliTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as td:
                     cwd = Path(td)
                     self.envelope(["init", "--json"], cwd)
-                    bindir = self.install_fake_spoolctl(cwd, **kwargs)
+                    bindir = install_fake_spoolctl(cwd, **kwargs)
                     result = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=expect, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
                     self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], code)
 
     def test_spoolctl_probe_version_prefix_policy_is_pinned(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd, version="0.4", capabilities_shape="real")
+            bindir = install_fake_spoolctl(cwd, version="0.4", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd, version="0.4.2-rc1", capabilities_shape="real")
+            bindir = install_fake_spoolctl(cwd, version="0.4.2-rc1", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2-rc1")
 
     def test_capabilities_inferctl_probe_reports_only_compatible_preflight_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_inferctl(cwd)
+            bindir = install_fake_inferctl(cwd)
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(caps["data"]["integrations"]["inferctl"]["available"], True)
             self.assertEqual(caps["data"]["integrations"]["inferctl"]["preflight"], True)
 
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
+            bindir = install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
             missing = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(missing["data"]["integrations"]["inferctl"], {"available": False, "planned": True, "preflight": False, "route": True, "contract_version": "0.2"})
 
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="invalid-json")
+            bindir = install_fake_inferctl(cwd, capabilities_shape="invalid-json")
             invalid = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(invalid["data"]["integrations"]["inferctl"], {"available": False, "planned": True})
 
@@ -702,8 +436,8 @@ class EvalctlCliTests(unittest.TestCase):
     def test_fake_inferctl_fixture_preserves_contract_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_inferctl(cwd)
-            caps = self.run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
+            bindir = install_fake_inferctl(cwd)
+            caps = run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
             data = caps["data"]
             self.assertEqual(data["contract_version"], "0.2")
             self.assertIsInstance(data["verbs"], list)
@@ -714,14 +448,14 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--allow-fallback", {flag["name"] for flag in verbs["preflight"]["flags"]})
             self.assertTrue(verbs["preflight"]["emits_data_on_failure"])
 
-            preflight = self.run_fake_tool(bindir, "inferctl", ["preflight", "code", "--prompt-file", "task.txt", "--json"])
+            preflight = run_fake_tool(bindir, "inferctl", ["preflight", "code", "--prompt-file", "task.txt", "--json"])
             preflight_data = preflight["data"]
             for key in ("route_decision", "route", "runnability", "policy", "runnable"):
                 self.assertIn(key, preflight_data)
             self.assertEqual(preflight_data["route_decision"]["selected_backend"], "ollama")
             self.assertEqual(preflight_data["route_decision"]["selected_model"], "qwen3:8b")
 
-            route = self.run_fake_tool(bindir, "inferctl", ["route", "code", "--prompt-file", "task.txt", "--json"])
+            route = run_fake_tool(bindir, "inferctl", ["route", "code", "--prompt-file", "task.txt", "--json"])
             route_data = route["data"]
             self.assertEqual(route_data["decision"]["selected_backend"], "ollama")
             self.assertEqual(route_data["decision"]["selected_model"], "qwen3:8b")
@@ -730,11 +464,11 @@ class EvalctlCliTests(unittest.TestCase):
     def test_fake_inferctl_fixture_supports_required_failure_modes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight", preflight_mode="nonzero-with-data", route_mode="nonzero-without-data")
-            caps = self.run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
+            bindir = install_fake_inferctl(cwd, capabilities_shape="missing-preflight", preflight_mode="nonzero-with-data", route_mode="nonzero-without-data")
+            caps = run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
             self.assertNotIn("preflight", {verb["name"] for verb in caps["data"]["verbs"]})
 
-            preflight = self.run_fake_tool(bindir, "inferctl", ["preflight", "code", "--prompt-file", "task.txt", "--json"], expect=3)
+            preflight = run_fake_tool(bindir, "inferctl", ["preflight", "code", "--prompt-file", "task.txt", "--json"], expect=3)
             self.assertFalse(preflight["data"]["runnable"])
             self.assertEqual(preflight["data"]["runnability"]["status"], "config_error")
 
@@ -745,14 +479,14 @@ class EvalctlCliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="preflight-only", envelope_shape=False)
-            raw = self.run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
+            bindir = install_fake_inferctl(cwd, capabilities_shape="preflight-only", envelope_shape=False)
+            raw = run_fake_tool(bindir, "inferctl", ["capabilities", "--json"])
             self.assertIn("preflight", {verb["name"] for verb in raw["verbs"]})
             self.assertNotIn("route", {verb["name"] for verb in raw["verbs"]})
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="invalid-json")
+            bindir = install_fake_inferctl(cwd, capabilities_shape="invalid-json")
             bad = subprocess.run([str(bindir / "inferctl"), "capabilities", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.assertEqual(bad.returncode, 0)
             with self.assertRaises(json.JSONDecodeError):
@@ -788,8 +522,8 @@ class EvalctlCliTests(unittest.TestCase):
             self.skipTest("inferctl binary is not available on PATH")
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            fake = self.install_fake_inferctl(cwd)
-            fake_caps = self.run_fake_tool(fake, "inferctl", ["capabilities", "--json"])
+            fake = install_fake_inferctl(cwd)
+            fake_caps = run_fake_tool(fake, "inferctl", ["capabilities", "--json"])
             real_caps_result = subprocess.run([real, "capabilities", "--json"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.assertEqual(real_caps_result.returncode, 0, msg=real_caps_result.stderr)
             real_caps = json.loads(real_caps_result.stdout)
@@ -804,7 +538,7 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
             control = self.envelope(["run", "code-review", "--run-id", "control", "--json"], cwd, extra_env={"SOURCE_DATE_EPOCH": "1700000000"})
-            bindir = self.install_fake_inferctl(cwd)
+            bindir = install_fake_inferctl(cwd)
             env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""), "SOURCE_DATE_EPOCH": "1700000000"}
             captured = self.envelope(["run", "code-review", "--run-id", "with-inferctl", "--inferctl-task", "code", "--json"], cwd, extra_env=env)
             self.assertEqual(captured["data"]["report_hash"], control["data"]["report_hash"])
@@ -840,7 +574,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(absent_manifest["provenance"]["inferctl"]["actual_mode"], "none")
             self.assertFalse(list(absent_run.glob("cases/*/inferctl-*")))
 
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
+            bindir = install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
             incompatible = self.envelope(["run", "code-review", "--run-id", "incompatible", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual([w["code"] for w in incompatible["warnings"]].count("W_INFERCTL_INCOMPATIBLE"), 1)
             incompatible_run = cwd / "evals" / "runs" / "incompatible"
@@ -852,19 +586,19 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
 
-            bindir = self.install_fake_inferctl(cwd, preflight_mode="policy-blocked")
+            bindir = install_fake_inferctl(cwd, preflight_mode="policy-blocked")
             blocked = self.envelope(["run", "code-review", "--run-id", "blocked", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertIn("W_INFERCTL_PREFLIGHT_BLOCKED", {warning["code"] for warning in blocked["warnings"]})
             blocked_manifest = json.loads((cwd / "evals" / "runs" / "blocked" / "manifest.json").read_text())
             self.assertFalse(blocked_manifest["cases"][0]["provenance"]["inferctl"]["runnable"])
 
-            bindir = self.install_fake_inferctl(cwd, preflight_mode="fallback")
+            bindir = install_fake_inferctl(cwd, preflight_mode="fallback")
             fallback = self.envelope(["run", "code-review", "--run-id", "fallback", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertNotIn("W_INFERCTL_PREFLIGHT_BLOCKED", {warning["code"] for warning in fallback["warnings"]})
             fallback_manifest = json.loads((cwd / "evals" / "runs" / "fallback" / "manifest.json").read_text())
             self.assertTrue(fallback_manifest["cases"][0]["provenance"]["inferctl"]["fallback_selected"])
 
-            bindir = self.install_fake_inferctl(cwd, preflight_mode="invalid-json")
+            bindir = install_fake_inferctl(cwd, preflight_mode="invalid-json")
             failed = self.envelope(["run", "code-review", "--run-id", "capture-failed", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual([w["code"] for w in failed["warnings"]].count("W_INFERCTL_CAPTURE_FAILED"), 1)
             failed_run = cwd / "evals" / "runs" / "capture-failed"
@@ -874,8 +608,8 @@ class EvalctlCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
-            bindir = self.install_fake_inferctl(cwd)
-            spoolctl = self.install_fake_spoolctl(cwd)
+            bindir = install_fake_inferctl(cwd)
+            spoolctl = install_fake_spoolctl(cwd)
             env = {"PATH": str(bindir) + os.pathsep + str(spoolctl) + os.pathsep + os.environ.get("PATH", "")}
 
             in_process = self.envelope(["run", "code-review", "--run-id", "infer-sync", "--inferctl-task", "code", "--json"], cwd, extra_env=env)
@@ -1244,7 +978,7 @@ class EvalctlCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
-            bindir = self.install_fake_spoolctl(cwd, capabilities_shape="bad-json")
+            bindir = install_fake_spoolctl(cwd, capabilities_shape="bad-json")
             spool = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(spool["data"]["components"]["spoolctl"]["state"], "degraded")
             self.assertTrue(spool["data"]["components"]["spoolctl"]["errors"])
@@ -1252,7 +986,7 @@ class EvalctlCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
-            bindir = self.install_fake_spoolctl(cwd, capabilities_shape="sleep")
+            bindir = install_fake_spoolctl(cwd, capabilities_shape="sleep")
             sleepy = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(sleepy["data"]["components"]["spoolctl"]["state"], "degraded")
             self.assertIn("timed out", sleepy["data"]["components"]["spoolctl"]["errors"][0]["message"])
@@ -1263,11 +997,11 @@ class EvalctlCliTests(unittest.TestCase):
             missing = self.envelope(["doctor", "--component", "inferctl", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(missing["data"]["components"]["inferctl"]["state"], "not_configured")
 
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
+            bindir = install_fake_inferctl(cwd, capabilities_shape="missing-preflight")
             incompatible = self.envelope(["doctor", "--component", "inferctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(incompatible["data"]["components"]["inferctl"]["state"], "degraded")
 
-            bindir = self.install_fake_inferctl(cwd, capabilities_shape="preflight-only")
+            bindir = install_fake_inferctl(cwd, capabilities_shape="preflight-only")
             compatible = self.envelope(["doctor", "--component", "inferctl", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             inferctl = compatible["data"]["components"]["inferctl"]
             self.assertEqual(inferctl["state"], "healthy")
@@ -1422,7 +1156,7 @@ class EvalctlCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
-            bindir = self.install_fake_spoolctl(cwd)
+            bindir = install_fake_spoolctl(cwd)
             queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
             in_process = self.envelope(["run", "code-review", "--run-id", "sync", "--json"], cwd)
             queued = self.envelope(["run", "code-review", "--run-id", "queued", "--queue", "spoolctl", "--slots", "2", "--json"], cwd, extra_env=queue_env)
@@ -1441,7 +1175,7 @@ class EvalctlCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
-            bindir = self.install_fake_spoolctl(cwd, version="0.4.0")
+            bindir = install_fake_spoolctl(cwd, version="0.4.0")
             incompatible = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=3, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(json.loads(incompatible.stdout)["errors"][0]["code"], "E_SPOOLCTL_INCOMPATIBLE")
 
@@ -1449,7 +1183,7 @@ class EvalctlCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
-            bindir = self.install_fake_spoolctl(cwd)
+            bindir = install_fake_spoolctl(cwd)
             queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
             self.keep_first_case_only(cwd)
             suite = self.load_suite(cwd)
@@ -1486,7 +1220,7 @@ class EvalctlCliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = self.install_fake_spoolctl(cwd)
+            bindir = install_fake_spoolctl(cwd)
             queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
             self.envelope(["suite", "add", "stdin-demo", "--runner-argv", f"{sys.executable} $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
             suite_dir = cwd / "evals" / "suites" / "stdin-demo"
