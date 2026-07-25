@@ -500,6 +500,51 @@ class EvalctlCliTests(unittest.TestCase):
             with self.assertRaises(json.JSONDecodeError):
                 json.loads(bad.stdout)
 
+    def test_fake_spoolctl_fixture_db_is_concurrency_safe(self) -> None:
+        # Regression for CI run 30072965277: a reader observed a partially written
+        # .spoolctl.db and raised JSONDecodeError. Readers must never see a torn
+        # file, and concurrent writers must not lose updates or reuse a job id.
+        import concurrent.futures
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = install_fake_spoolctl(cwd)
+            db = cwd / ".spoolctl.db"
+            workdir = cwd / "work"
+            workdir.mkdir()
+
+            def add(index: int) -> str:
+                data = run_fake_tool(bindir, "spoolctl", [
+                    "add", "--db", str(db), "--json", "--key", f"run:case-{index}",
+                    "--cwd", str(workdir), "--timeout", "30",
+                    "--", "/bin/sh", "-c", "exit 0",
+                ])
+                return data["data"]["job_id"]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                job_ids = list(pool.map(add, range(24)))
+
+            self.assertEqual(len(set(job_ids)), 24, "concurrent add reused a job id")
+            state = json.loads(db.read_text())
+            self.assertEqual(len(state["jobs"]), 24, "concurrent add lost a job entry")
+            self.assertEqual(set(state["jobs"]), set(job_ids))
+
+            worker = subprocess.Popen([str(bindir / "spoolctl"), "work", "--db", str(db), "--drain"],
+                                      text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                def read(job_id: str) -> str:
+                    return run_fake_tool(bindir, "spoolctl", ["show", "--db", str(db), "--json", job_id])["data"]["state"]
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                    states = list(pool.map(read, job_ids * 2))
+            finally:
+                worker.communicate(timeout=60)
+
+            self.assertEqual(worker.returncode, 0)
+            self.assertTrue(set(states) <= {"queued", "succeeded"}, f"unexpected states: {sorted(set(states))}")
+            final = run_fake_tool(bindir, "spoolctl", ["wait", "--db", str(db), "--json", *job_ids])
+            self.assertTrue(final["data"]["all_succeeded"])
+
     def test_envelope_normalization_keeps_semantic_meta(self) -> None:
         payload = {
             "ok": True,
