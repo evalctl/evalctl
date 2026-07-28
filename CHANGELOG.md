@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Spoolctl compatibility fix. `contract_version` remains `1`; command names,
+envelope shape, artifact layout, and report projection remain compatible with
+v0.4.
+
+- Queued spoolctl runs now require `spoolctl >= 0.4.11` speaking contract
+  `>= 2`. The previous minimum, `0.4.1`, was never published to PyPI, and the
+  compatibility gate pinned spoolctl's contract to exactly `1`. spoolctl moved
+  to contract `2` in its 0.4.5, so `evalctl run <suite> --queue spoolctl`
+  failed with `E_SPOOLCTL_INCOMPATIBLE` against every installable spoolctl.
+- A spoolctl reporting a contract newer than `2` is now accepted rather than
+  rejected. The comparison is a numeric floor with no upper bound, so a future
+  spoolctl release does not become an evalctl outage.
+- The compatibility gate reports three distinguishable causes instead of one
+  message. Version mismatches carry `observed_version` and `minimum_version`,
+  contract mismatches carry `observed_contract` and `minimum_contract`, and
+  missing `spoolctl add` flags carry `missing_flags`. `E_SPOOLCTL_INCOMPATIBLE`
+  and exit `3` are unchanged.
+- Prerelease spoolctl versions at the floor are rejected. `0.4.11rc1` no longer
+  passes as `0.4.11`; `0.4.12rc1`, `0.5.0a1`, and `0.4.11+local` are accepted.
+- `capabilities` reports `minimum_contract` alongside `minimum_version`, and
+  the observed `contract_version` when spoolctl is available.
+- `evalctl doctor` recommends installing or upgrading spoolctl instead of
+  re-running `evalctl doctor`, and names a version that the command it prints
+  can install. Doctor exit codes are unchanged.
+
 ## 0.4.1 - 2026-07-24
 
 CLI grammar hardening and refactor-safety patch. `contract_version` remains

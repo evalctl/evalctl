@@ -132,7 +132,8 @@ paste-ready follow-up commands. `--resume`, `--queue spoolctl`, `--slots`, and
 ## Optional Spoolctl Queue
 
 `evalctl run <suite> --queue spoolctl --json` delegates only runner execution to
-spoolctl (`>= 0.4.1`). Evalctl still prepares workspaces, normalizes stdout and
+spoolctl (`>= 0.4.11`, speaking contract `>= 2`). A spoolctl reporting a newer
+contract is accepted. Evalctl still prepares workspaces, normalizes stdout and
 stderr, captures workspace diffs, scores cases, and writes terminal markers. If
 spoolctl is absent or incompatible, queued runs fail explicitly; non-queued runs
 do not need spoolctl.
