@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Mapping
 
 from . import __version__
-from .integration_contracts import MINIMUM_SPOOLCTL_VERSION
+from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_VERSION
 
 CONTRACT_VERSION = 1
 TOOL = "evalctl"
@@ -301,9 +301,11 @@ def capabilities_data(*, probe_spoolctl_func: Callable[..., dict[str, Any]] | No
         if probe_spoolctl_func is None:
             raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", "spoolctl probe unavailable", "run from evalctl.cli for live integration status", 3)
         spool = probe_spoolctl_func()
-        spoolctl_status = {"available": True, "planned": False, "minimum_version": MINIMUM_SPOOLCTL_VERSION, "version": spool.get("version") or spool.get("tool_version")}
+        spoolctl_status = {"available": True, "planned": False, "minimum_version": MINIMUM_SPOOLCTL_VERSION,
+                           "minimum_contract": MINIMUM_SPOOLCTL_CONTRACT, "version": spool.get("version") or spool.get("tool_version"),
+                           "contract_version": spool.get("contract_version")}
     except EvalctlError:
-        spoolctl_status = {"available": False, "planned": False, "minimum_version": MINIMUM_SPOOLCTL_VERSION}
+        spoolctl_status = {"available": False, "planned": False, "minimum_version": MINIMUM_SPOOLCTL_VERSION, "minimum_contract": MINIMUM_SPOOLCTL_CONTRACT}
     try:
         if inferctl_capabilities_func is None or inferctl_verb_names_func is None:
             raise EvalctlError("E_INFERCTL_UNAVAILABLE", "inferctl probe unavailable", "run from evalctl.cli for live integration status", 3)

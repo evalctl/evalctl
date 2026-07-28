@@ -222,9 +222,9 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:6b2ab5de4959766669fed889b9a0e2933c55bbd51e9a905996bccf18d7551fab")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:ded8c6bbe9fac7519e571ab2e1cb9c790cf2ff06cd939a2c805978251b4af9f8")
             self.assertEqual(caps["tool_version"], "0.4.1")
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
             self.assertIn("inferctl_preflight_provenance", caps["data"]["features"])
@@ -412,7 +412,7 @@ class EvalctlCliTests(unittest.TestCase):
                     cwd = Path(td)
                     bindir = install_fake_spoolctl(cwd, **kwargs)
                     caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-                    self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
+                    self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
 
     def test_spoolctl_probe_run_queue_hard_errors_on_incompatible_shapes(self) -> None:
         cases = [
@@ -436,6 +436,27 @@ class EvalctlCliTests(unittest.TestCase):
                     bindir = install_fake_spoolctl(cwd, **kwargs)
                     result = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=expect, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
                     self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], code)
+
+    def test_capabilities_reports_spoolctl_contract_fields(self) -> None:
+        # Version alone cannot diagnose a contract mismatch, which is the exact
+        # failure this work fixes.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = install_fake_spoolctl(cwd, contract_version="7")
+            caps = self.envelope(["capabilities", "--json"], cwd,
+                                 extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+            spool = caps["data"]["integrations"]["spoolctl"]
+            self.assertEqual(spool, {"available": True, "planned": False, "minimum_version": "0.4.11",
+                                     "minimum_contract": 2, "version": "0.4.11", "contract_version": 7})
+            self.assertIsInstance(spool["contract_version"], int)
+            self.assertIsInstance(spool["minimum_contract"], int)
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            result = self.run_cli(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(result.returncode, 0)
+            spool = json.loads(result.stdout)["data"]["integrations"]["spoolctl"]
+            self.assertEqual(spool, {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
 
     def test_spoolctl_accepts_contracts_newer_than_the_floor(self) -> None:
         # The defect this replaces was a forward-compatibility failure: evalctl
@@ -488,13 +509,13 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             bindir = install_fake_spoolctl(cwd, version="0.4", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             bindir = install_fake_spoolctl(cwd, version="0.4.11-rc1", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
 
     def test_spoolctl_version_prerelease_policy(self) -> None:
         # An rc of the floor release precedes the floor release and is not it.
