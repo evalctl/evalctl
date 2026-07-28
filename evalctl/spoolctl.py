@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from typing import Any
 
-from .integration_contracts import MINIMUM_SPOOLCTL_VERSION, SPOOLCTL_UPGRADE_HINT
+from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_VERSION, SPOOLCTL_UPGRADE_HINT
 from .static_contract import EvalctlError
 
 
@@ -16,6 +16,42 @@ def version_tuple(value: str) -> tuple[int, ...]:
         match = re.match(r"(\d+)", item)
         parts.append(int(match.group(1)) if match else 0)
     return tuple(parts)
+
+
+def contract_scalar(value: Any) -> Any:
+    return value if value is None or isinstance(value, (int, str)) else repr(value)
+
+
+def parse_spoolctl_contract(value: Any) -> int:
+    """Return spoolctl's contract version as an int.
+
+    The contract must become a number before it is compared. A string compare
+    sorts "10" before "2", so a spoolctl newer than the floor would be rejected
+    -- the same forward-compatibility failure that the old equality pin caused.
+
+    spoolctl's JSON type for this field is not guaranteed, so both 2 and "2"
+    are accepted. Missing, empty, non-numeric, and non-positive values are
+    rejected with the same fields as a below-floor contract, so a consumer sees
+    one error shape per cause rather than one shape for old-but-valid values
+    and another for garbage.
+    """
+    parsed: int | None = None
+    if isinstance(value, bool):
+        parsed = None
+    elif isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().lstrip("+").isdigit():
+        parsed = int(value.strip())
+    if parsed is None or parsed < 1:
+        raise EvalctlError(
+            "E_SPOOLCTL_INCOMPATIBLE",
+            f"spoolctl reported an unusable contract version: {value!r}",
+            SPOOLCTL_UPGRADE_HINT,
+            3,
+            observed_contract=contract_scalar(value),
+            minimum_contract=MINIMUM_SPOOLCTL_CONTRACT,
+        )
+    return parsed
 
 
 def spoolctl_binary() -> str:

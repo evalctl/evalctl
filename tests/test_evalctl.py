@@ -343,6 +343,29 @@ class EvalctlCliTests(unittest.TestCase):
         self.assertEqual(spoolctl_module.spoolctl_flag_names([{"name": "--cwd"}, 7, None, "--env"]), {"--env"})
         self.assertEqual(spoolctl_module.spoolctl_flag_names({"flag": "--cwd"}), set())
 
+    def test_parse_spoolctl_contract_is_numeric_not_lexicographic(self) -> None:
+        self.assertEqual(spoolctl_module.parse_spoolctl_contract(2), 2)
+        self.assertEqual(spoolctl_module.parse_spoolctl_contract("2"), 2)
+        self.assertEqual(spoolctl_module.parse_spoolctl_contract(" 2 "), 2)
+        for value in (10, "10", 17, "17"):
+            with self.subTest(value=value):
+                self.assertGreater(
+                    spoolctl_module.parse_spoolctl_contract(value),
+                    spoolctl_module.parse_spoolctl_contract("2"),
+                )
+
+    def test_parse_spoolctl_contract_rejects_unusable_values_with_fields(self) -> None:
+        for value in (None, "", "   ", "abc", "2.1", "v2", 0, -1, True, [], {"a": 1}):
+            with self.subTest(value=value):
+                with self.assertRaises(static_contract.EvalctlError) as ctx:
+                    spoolctl_module.parse_spoolctl_contract(value)
+                error = ctx.exception.error
+                self.assertEqual(error["code"], "E_SPOOLCTL_INCOMPATIBLE")
+                self.assertEqual(error["exit_code"], 3)
+                self.assertIn("observed_contract", error)
+                self.assertEqual(error["minimum_contract"], 2)
+                json.dumps(error)
+
     def test_spoolctl_probe_accepts_real_compact_and_raw_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
