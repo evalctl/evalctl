@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from typing import Any
 
+from .integration_contracts import MINIMUM_SPOOLCTL_VERSION, SPOOLCTL_UPGRADE_HINT
 from .static_contract import EvalctlError
 
 
@@ -20,7 +21,7 @@ def version_tuple(value: str) -> tuple[int, ...]:
 def spoolctl_binary() -> str:
     path = shutil.which("spoolctl")
     if not path:
-        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", "spoolctl is not available on PATH", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
+        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", "spoolctl is not available on PATH", SPOOLCTL_UPGRADE_HINT, 3)
     return path
 
 
@@ -34,15 +35,15 @@ def run_spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = No
         detail = (stderr or stdout or "timed out").strip()
         raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl operation timed out: {detail}", "upgrade, restart, or bypass spoolctl", 3, timeout_seconds=timeout)
     except OSError as exc:
-        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", f"could not run spoolctl: {exc}", "install spoolctl >= 0.4.1 or drop --queue spoolctl", 3)
+        raise EvalctlError("E_SPOOLCTL_UNAVAILABLE", f"could not run spoolctl: {exc}", SPOOLCTL_UPGRADE_HINT, 3)
     if result.returncode == 4:
         raise EvalctlError("E_JOB_TRANSIENT", "spoolctl reported a transient job-system failure", "retry the queued run or resume it later", 4)
     if result.returncode not in allow_exit_codes:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl command failed: {result.stderr.strip() or result.stdout.strip()}", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl command failed: {result.stderr.strip() or result.stdout.strip()}", SPOOLCTL_UPGRADE_HINT, 3)
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl returned invalid JSON: {exc.msg}", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", f"spoolctl returned invalid JSON: {exc.msg}", SPOOLCTL_UPGRADE_HINT, 3)
     return result.returncode, payload
 
 
@@ -55,7 +56,7 @@ def spoolctl_json(args: list[str], *, allow_exit_codes: set[int] | None = None, 
         return data if isinstance(data, dict) else {"value": data}
     if isinstance(payload, dict):
         return payload
-    raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl JSON output must be an object", "upgrade spoolctl to >= 0.4.1 or drop --queue spoolctl", 3)
+    raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl JSON output must be an object", SPOOLCTL_UPGRADE_HINT, 3)
 
 
 def spoolctl_flag_names(flags: Any) -> set[str]:
@@ -73,14 +74,14 @@ def spoolctl_flag_names(flags: Any) -> set[str]:
 def probe_spoolctl(*, timeout: float | None = None) -> dict[str, Any]:
     _, payload = run_spoolctl_json(["capabilities", "--json"], timeout=timeout)
     if not isinstance(payload, dict):
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities output must be a JSON object", "upgrade spoolctl to >= 0.4.1", 3)
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities output must be a JSON object", SPOOLCTL_UPGRADE_HINT, 3)
     is_envelope = "ok" in payload
     if is_envelope:
         if not payload.get("ok"):
             raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities returned an error envelope", "inspect spoolctl output or upgrade spoolctl", 3)
         data = payload.get("data")
         if not isinstance(data, dict):
-            raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities data must be an object", "upgrade spoolctl to >= 0.4.1", 3)
+            raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl capabilities data must be an object", SPOOLCTL_UPGRADE_HINT, 3)
     else:
         data = payload
     envelope_version = str(payload.get("tool_version") or "") if is_envelope else ""
@@ -92,6 +93,6 @@ def probe_spoolctl(*, timeout: float | None = None) -> dict[str, Any]:
         add_info = verbs.get("add", {})
         if isinstance(add_info, dict):
             add_flags = spoolctl_flag_names(add_info.get("flags", []))
-    if version_tuple(version) < (0, 4, 1) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl is missing required evalctl queue capabilities", "upgrade spoolctl to >= 0.4.1", 3)
+    if version_tuple(version) < version_tuple(MINIMUM_SPOOLCTL_VERSION) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl is missing required evalctl queue capabilities", SPOOLCTL_UPGRADE_HINT, 3)
     return {**data, "version": version} if envelope_version else data

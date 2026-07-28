@@ -42,7 +42,7 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
    and cleanup. Reservations are TTL files with a background heartbeat; no daemon or
    lock server is required.
 9. Optionally use `evalctl run <suite> --queue spoolctl --json` to delegate runner
-   execution to spoolctl. Spoolctl is optional and must be >= 0.4.1; absent or incompatible
+   execution to spoolctl. Spoolctl is optional and must be >= 0.4.11; absent or incompatible
    spoolctl is a hard error only when `--queue spoolctl` is requested. The queue DB is
    per-run `.spoolctl.db`, so externally managed cross-machine workers require a shared
    filesystem and are not a general hosted-worker mode.

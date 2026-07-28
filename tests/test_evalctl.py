@@ -222,9 +222,9 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:aa4c860b335417850a2c47ae15e92edf73e0d07a65a1b9060114f4545fdbcb0e")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:6b2ab5de4959766669fed889b9a0e2933c55bbd51e9a905996bccf18d7551fab")
             self.assertEqual(caps["tool_version"], "0.4.1")
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
             self.assertIn("inferctl_preflight_provenance", caps["data"]["features"])
@@ -332,7 +332,7 @@ class EvalctlCliTests(unittest.TestCase):
             bindir = install_fake_spoolctl(cwd)
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertTrue(caps["data"]["integrations"]["spoolctl"]["available"])
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11")
 
     def test_spoolctl_flag_names_accepts_real_and_compact_shapes(self) -> None:
         self.assertEqual(spoolctl_module.spoolctl_flag_names(["--cwd", "--env", "--max-crashes"]), {"--cwd", "--env", "--max-crashes"})
@@ -348,26 +348,26 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             bindir = install_fake_spoolctl(cwd, capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11")
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = install_fake_spoolctl(cwd, version="0.4.1", capabilities_shape="compact")
+            bindir = install_fake_spoolctl(cwd, version="0.4.11", capabilities_shape="compact")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.1")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11")
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="raw")
+            bindir = install_fake_spoolctl(cwd, version="0.4.11", capabilities_shape="raw")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11")
 
     def test_spoolctl_probe_envelope_version_is_authoritative(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = install_fake_spoolctl(cwd, version="0.4.2", capabilities_shape="real", data_version="9.9.9")
+            bindir = install_fake_spoolctl(cwd, version="0.4.11", capabilities_shape="real", data_version="9.9.9")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11")
 
     def test_spoolctl_probe_capabilities_degrades_on_incompatible_shapes(self) -> None:
         cases = [
@@ -385,7 +385,7 @@ class EvalctlCliTests(unittest.TestCase):
                     cwd = Path(td)
                     bindir = install_fake_spoolctl(cwd, **kwargs)
                     caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-                    self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
+                    self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
 
     def test_spoolctl_probe_run_queue_hard_errors_on_incompatible_shapes(self) -> None:
         cases = [
@@ -411,13 +411,13 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             bindir = install_fake_spoolctl(cwd, version="0.4", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.1"})
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
 
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
-            bindir = install_fake_spoolctl(cwd, version="0.4.2-rc1", capabilities_shape="real")
+            bindir = install_fake_spoolctl(cwd, version="0.4.11-rc1", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.2-rc1")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11-rc1")
 
     def test_capabilities_inferctl_probe_reports_only_compatible_preflight_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 
-def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.2", capabilities_shape: str = "real",
+def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_shape: str = "real",
                           capability_flags: object | None = None, include_version: bool = True,
                           data_version: str | None = None) -> Path:
     bindir = cwd / "bin"

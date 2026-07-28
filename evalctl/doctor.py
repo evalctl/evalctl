@@ -10,6 +10,7 @@ from typing import Any
 
 from . import __version__
 from .inferctl import inferctl_binary, inferctl_capabilities, inferctl_verb_names
+from .integration_contracts import MINIMUM_SPOOLCTL_VERSION
 from .reports import report_data
 from .run_state import classify_run_dir, runs_root, runs_with_inferctl_state, runs_with_queue_state
 from .spoolctl import probe_spoolctl
@@ -82,7 +83,7 @@ def probe_spoolctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, A
         return component(state, "fast mode used PATH-only spoolctl check", observed={"binary": binary, "queued_runs": queued})
     if binary is None:
         state = "degraded" if queued else "not_configured"
-        recommended = action("install spoolctl >= 0.4.1 or run without --queue spoolctl", "Queued state exists but spoolctl is absent.") if queued else None
+        recommended = action(f"install spoolctl >= {MINIMUM_SPOOLCTL_VERSION} or run without --queue spoolctl", "Queued state exists but spoolctl is absent.") if queued else None
         return component(state, "spoolctl is not available on PATH", observed={"queued_runs": queued}, recommended_action=recommended)
     try:
         data = probe_spoolctl(timeout=3)
