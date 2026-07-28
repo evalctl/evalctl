@@ -437,6 +437,26 @@ class EvalctlCliTests(unittest.TestCase):
                     result = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=expect, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
                     self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], code)
 
+    def test_spoolctl_accepts_contracts_newer_than_the_floor(self) -> None:
+        # The defect this replaces was a forward-compatibility failure: evalctl
+        # rejected a spoolctl contract newer than the one it was written
+        # against. Pinning only today's value would reproduce the outage one
+        # spoolctl release from now and call it passing, so the regression that
+        # matters is "a contract we have never seen works", not "2 works".
+        # Contract 10 does double duty: "10" < "2" as strings, so it also
+        # proves the comparison is numeric. Do not simplify this to a single
+        # current-value assertion.
+        for contract in (2, "2", 10, "10", 17):
+            with self.subTest(contract=contract):
+                with tempfile.TemporaryDirectory() as td:
+                    cwd = Path(td)
+                    bindir = install_fake_spoolctl(cwd, contract_version=contract)
+                    caps = self.envelope(["capabilities", "--json"], cwd,
+                                         extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+                    spool = caps["data"]["integrations"]["spoolctl"]
+                    self.assertTrue(spool["available"], spool)
+                    self.assertEqual(spool["version"], "0.4.11")
+
     def test_spoolctl_gate_reports_three_distinguishable_causes(self) -> None:
         # One message for three unrelated causes told a user whose spoolctl was
         # merely a contract ahead that flags were missing. Each cause now names
