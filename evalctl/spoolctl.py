@@ -10,12 +10,41 @@ from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_V
 from .static_contract import EvalctlError
 
 
-def version_tuple(value: str) -> tuple[int, ...]:
-    parts = []
-    for item in value.split("."):
+def parse_spoolctl_version(value: str) -> tuple[tuple[int, ...], bool]:
+    """Return spoolctl's version as (base release tuple, is_prerelease).
+
+    The previous helper took the numeric prefix of each dot-segment and threw
+    the rest away, so 0.4.11-rc1, 0.4.11rc1, 0.4.11.dev1, and 0.4.11+local all
+    became (0, 4, 11) and a release candidate passed as its final release.
+    The trailing text is kept here as a prerelease flag instead of discarded.
+
+    Local/build metadata after "+" is not a prerelease marker and is dropped
+    without setting the flag.
+    """
+    base_text = str(value).strip().split("+", 1)[0]
+    parts: list[int] = []
+    prerelease = False
+    for item in base_text.split("."):
         match = re.match(r"(\d+)", item)
-        parts.append(int(match.group(1)) if match else 0)
-    return tuple(parts)
+        if match is None:
+            prerelease = prerelease or bool(item)
+            continue
+        parts.append(int(match.group(1)))
+        if match.end() != len(item):
+            prerelease = True
+    return tuple(parts), prerelease
+
+
+def spoolctl_version_supported(value: str) -> bool:
+    """Whether an observed spoolctl version clears the supported floor.
+
+    A prerelease must be strictly above the floor: an rc of the floor release
+    precedes that release and is not the release. Local build metadata on a
+    final version at or above the floor is fine.
+    """
+    base, prerelease = parse_spoolctl_version(value)
+    floor, _ = parse_spoolctl_version(MINIMUM_SPOOLCTL_VERSION)
+    return base > floor if prerelease else base >= floor
 
 
 def contract_scalar(value: Any) -> Any:
@@ -129,6 +158,6 @@ def probe_spoolctl(*, timeout: float | None = None) -> dict[str, Any]:
         add_info = verbs.get("add", {})
         if isinstance(add_info, dict):
             add_flags = spoolctl_flag_names(add_info.get("flags", []))
-    if version_tuple(version) < version_tuple(MINIMUM_SPOOLCTL_VERSION) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
+    if not spoolctl_version_supported(version) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
         raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl is missing required evalctl queue capabilities", SPOOLCTL_UPGRADE_HINT, 3)
     return {**data, "version": version} if envelope_version else data

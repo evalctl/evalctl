@@ -440,7 +440,26 @@ class EvalctlCliTests(unittest.TestCase):
             cwd = Path(td)
             bindir = install_fake_spoolctl(cwd, version="0.4.11-rc1", capabilities_shape="real")
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
-            self.assertEqual(caps["data"]["integrations"]["spoolctl"]["version"], "0.4.11-rc1")
+            self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11"})
+
+    def test_spoolctl_version_prerelease_policy(self) -> None:
+        # An rc of the floor release precedes the floor release and is not it.
+        # The old numeric-prefix helper mapped every one of these to (0, 4, 11)
+        # and let a release candidate pass as the release.
+        for value in ("0.4.11", "0.4.11+local", "0.4.11.0", "0.4.12rc1", "0.4.12-rc1", "0.5.0a1", "1.0.0"):
+            with self.subTest(accept=value):
+                self.assertTrue(spoolctl_module.spoolctl_version_supported(value))
+        for value in ("0.4.11rc1", "0.4.11-rc1", "0.4.11.dev1", "0.4.11a1", "0.4.11b2", "0.4.10", "0.4.9", "0.4", "", "nonsense"):
+            with self.subTest(reject=value):
+                self.assertFalse(spoolctl_module.spoolctl_version_supported(value))
+
+    def test_parse_spoolctl_version_separates_base_from_prerelease(self) -> None:
+        self.assertEqual(spoolctl_module.parse_spoolctl_version("0.4.11"), ((0, 4, 11), False))
+        self.assertEqual(spoolctl_module.parse_spoolctl_version("0.4.11+local"), ((0, 4, 11), False))
+        self.assertEqual(spoolctl_module.parse_spoolctl_version("0.4.11rc1"), ((0, 4, 11), True))
+        self.assertEqual(spoolctl_module.parse_spoolctl_version("0.4.11-rc1"), ((0, 4, 11), True))
+        self.assertEqual(spoolctl_module.parse_spoolctl_version("0.4.11.dev1"), ((0, 4, 11), True))
+        self.assertEqual(spoolctl_module.parse_spoolctl_version("0.5.0a1"), ((0, 5, 0), True))
 
     def test_capabilities_inferctl_probe_reports_only_compatible_preflight_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
