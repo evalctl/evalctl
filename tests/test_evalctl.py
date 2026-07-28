@@ -395,6 +395,10 @@ class EvalctlCliTests(unittest.TestCase):
     def test_spoolctl_probe_capabilities_degrades_on_incompatible_shapes(self) -> None:
         cases = [
             {"version": "0.4.0"},
+            {"contract_version": 1},
+            {"contract_version": "1"},
+            {"contract_version": None},
+            {"contract_version": "two"},
             {"capability_flags": [{"flag": "--cwd"}, {"flag": "--env"}]},
             {"capability_flags": {"flag": "--cwd"}},
             {"include_version": False},
@@ -413,6 +417,10 @@ class EvalctlCliTests(unittest.TestCase):
     def test_spoolctl_probe_run_queue_hard_errors_on_incompatible_shapes(self) -> None:
         cases = [
             ({"version": "0.4.0"}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"contract_version": 1}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"contract_version": "1"}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"contract_version": None}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
+            ({"contract_version": "two"}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
             ({"capability_flags": [{"flag": "--cwd"}, {"flag": "--env"}]}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
             ({"capability_flags": {"flag": "--cwd"}}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
             ({"include_version": False}, 3, "E_SPOOLCTL_INCOMPATIBLE"),
@@ -428,6 +436,32 @@ class EvalctlCliTests(unittest.TestCase):
                     bindir = install_fake_spoolctl(cwd, **kwargs)
                     result = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=expect, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
                     self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], code)
+
+    def test_spoolctl_gate_reports_three_distinguishable_causes(self) -> None:
+        # One message for three unrelated causes told a user whose spoolctl was
+        # merely a contract ahead that flags were missing. Each cause now names
+        # itself and carries its own machine-readable fields.
+        cases = [
+            ({"version": "0.4.0"}, {"observed_version": "0.4.0", "minimum_version": "0.4.11"}),
+            ({"contract_version": 1}, {"observed_contract": 1, "minimum_contract": 2}),
+            ({"capability_flags": ["--cwd", "--env"]}, {"missing_flags": ["--max-crashes"]}),
+        ]
+        messages = set()
+        for kwargs, expected_fields in cases:
+            with self.subTest(kwargs=kwargs):
+                with tempfile.TemporaryDirectory() as td:
+                    cwd = Path(td)
+                    self.envelope(["init", "--json"], cwd)
+                    bindir = install_fake_spoolctl(cwd, **kwargs)
+                    result = self.run_cli(["run", "code-review", "--run-id", "gate", "--queue", "spoolctl", "--json"], cwd, expect=3,
+                                          extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
+                    error = json.loads(result.stdout)["errors"][0]
+                    self.assertEqual(error["code"], "E_SPOOLCTL_INCOMPATIBLE")
+                    self.assertEqual(error["exit_code"], 3)
+                    for key, value in expected_fields.items():
+                        self.assertEqual(error[key], value)
+                    messages.add(error["message"])
+        self.assertEqual(len(messages), 3, messages)
 
     def test_spoolctl_probe_version_prefix_policy_is_pinned(self) -> None:
         with tempfile.TemporaryDirectory() as td:

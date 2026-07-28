@@ -7,7 +7,7 @@ from pathlib import Path
 
 def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_shape: str = "real",
                           capability_flags: object | None = None, include_version: bool = True,
-                          data_version: str | None = None) -> Path:
+                          data_version: str | None = None, contract_version: object = 2) -> Path:
     bindir = cwd / "bin"
     bindir.mkdir(exist_ok=True)
     script = bindir / "spoolctl"
@@ -29,6 +29,7 @@ def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_sh
         f"CAPABILITY_FLAGS = {capability_flags!r}\n"
         f"INCLUDE_VERSION = {include_version!r}\n"
         f"DATA_VERSION = {data_version!r}\n"
+        f"CONTRACT_VERSION = {contract_version!r}\n"
         "def emit(data, code=0):\n"
         "    print(json.dumps({'ok': True, 'data': data}, sort_keys=True))\n"
         "    raise SystemExit(code)\n"
@@ -67,7 +68,7 @@ def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_sh
         "        print(json.dumps({'ok': False, 'errors': [{'code': 'BROKEN'}]}, sort_keys=True)); raise SystemExit(0)\n"
         "    if CAPABILITIES_SHAPE == 'exit4':\n"
         "        print(json.dumps({'ok': False, 'errors': [{'code': 'TRANSIENT'}]}, sort_keys=True)); raise SystemExit(4)\n"
-        "    data = {'contract_version': '1', 'verbs': {'add': {'flags': CAPABILITY_FLAGS}}}\n"
+        "    data = {'contract_version': CONTRACT_VERSION, 'verbs': {'add': {'flags': CAPABILITY_FLAGS}}}\n"
         "    if INCLUDE_VERSION and (CAPABILITIES_SHAPE in ('compact', 'raw') or DATA_VERSION is not None):\n"
         "        data['version'] = DATA_VERSION or VERSION\n"
         "    if CAPABILITIES_SHAPE == 'raw':\n"

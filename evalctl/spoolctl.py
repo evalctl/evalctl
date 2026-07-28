@@ -47,6 +47,9 @@ def spoolctl_version_supported(value: str) -> bool:
     return base > floor if prerelease else base >= floor
 
 
+REQUIRED_ADD_FLAGS = frozenset({"--cwd", "--env", "--max-crashes"})
+
+
 def contract_scalar(value: Any) -> Any:
     return value if value is None or isinstance(value, (int, str)) else repr(value)
 
@@ -151,13 +154,55 @@ def probe_spoolctl(*, timeout: float | None = None) -> dict[str, Any]:
         data = payload
     envelope_version = str(payload.get("tool_version") or "") if is_envelope else ""
     version = str(envelope_version or data.get("tool_version") or data.get("version") or "")
-    contract = str(data.get("contract_version") or "")
     verbs = data.get("verbs", {})
     add_flags = set()
     if isinstance(verbs, dict):
         add_info = verbs.get("add", {})
         if isinstance(add_info, dict):
             add_flags = spoolctl_flag_names(add_info.get("flags", []))
-    if not spoolctl_version_supported(version) or contract != "1" or not {"--cwd", "--env", "--max-crashes"} <= add_flags:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl is missing required evalctl queue capabilities", SPOOLCTL_UPGRADE_HINT, 3)
-    return {**data, "version": version} if envelope_version else data
+
+    # Three unrelated questions, three answers. One boolean covering all of them
+    # told a user whose spoolctl was merely a contract ahead that flags were
+    # missing.
+    if not spoolctl_version_supported(version):
+        raise EvalctlError(
+            "E_SPOOLCTL_INCOMPATIBLE",
+            f"spoolctl {version or '(unreported version)'} is below the supported minimum {MINIMUM_SPOOLCTL_VERSION}",
+            SPOOLCTL_UPGRADE_HINT,
+            3,
+            observed_version=version,
+            minimum_version=MINIMUM_SPOOLCTL_VERSION,
+        )
+
+    # A floor, deliberately, not an equality check. The equality form looks more
+    # careful and is what broke this: spoolctl moved CONTRACT_VERSION 1 -> 2 in
+    # its 0.4.5 and every queued evalctl run failed for nine releases. Each of a
+    # sibling tool's routine releases must not become an evalctl outage.
+    # Newer-than-floor contracts are accepted with no upper bound: a
+    # maximum-tested constant would need bumping on every spoolctl release and
+    # would go stale, so the observed value is reported instead of policed.
+    observed_contract = parse_spoolctl_contract(data.get("contract_version"))
+    if observed_contract < MINIMUM_SPOOLCTL_CONTRACT:
+        raise EvalctlError(
+            "E_SPOOLCTL_INCOMPATIBLE",
+            f"spoolctl speaks contract {observed_contract}, below the supported minimum {MINIMUM_SPOOLCTL_CONTRACT}",
+            SPOOLCTL_UPGRADE_HINT,
+            3,
+            observed_contract=observed_contract,
+            minimum_contract=MINIMUM_SPOOLCTL_CONTRACT,
+        )
+
+    missing_flags = sorted(REQUIRED_ADD_FLAGS - add_flags)
+    if missing_flags:
+        raise EvalctlError(
+            "E_SPOOLCTL_INCOMPATIBLE",
+            f"spoolctl add is missing flags required by evalctl: {', '.join(missing_flags)}",
+            SPOOLCTL_UPGRADE_HINT,
+            3,
+            missing_flags=missing_flags,
+        )
+
+    resolved = {**data, "contract_version": observed_contract}
+    if envelope_version:
+        resolved["version"] = version
+    return resolved
