@@ -1177,6 +1177,69 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(inferctl["state"], "healthy")
             self.assertFalse(inferctl["observed"]["route_available"])
 
+    def test_doctor_spoolctl_recommends_a_fix_not_another_diagnosis(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = install_fake_spoolctl(cwd, contract_version=1)
+            env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            doctor = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env=env)
+            spool = doctor["data"]["components"]["spoolctl"]
+            self.assertEqual(spool["state"], "degraded")
+            self.assertEqual(spool["observed"]["contract_version"], 1)
+            self.assertEqual(spool["observed"]["minimum_contract"], 2)
+            recommended = spool["recommended_action"]
+            self.assertIn("0.4.11", recommended["command"])
+            self.assertIn("run without --queue spoolctl", recommended["alternatives"])
+            self.assertNotIn("evalctl doctor", recommended["command"])
+            self.assertNotIn("evalctl doctor", doctor["data"]["recommended_action"]["command"])
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = install_fake_spoolctl(cwd)
+            env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            healthy = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env=env)
+            observed = healthy["data"]["components"]["spoolctl"]["observed"]
+            self.assertEqual(healthy["data"]["components"]["spoolctl"]["state"], "healthy")
+            self.assertEqual(observed["contract_version"], 2)
+            self.assertEqual(observed["version"], "0.4.11")
+
+    def test_doctor_absent_spoolctl_recommends_an_installable_version(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = install_fake_spoolctl(cwd)
+            env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            self.run_cli(["run", "code-review", "--run-id", "queued", "--queue", "spoolctl", "--json"], cwd, extra_env=env)
+            doctor = self.envelope(["doctor", "--component", "spoolctl", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            spool = doctor["data"]["components"]["spoolctl"]
+            self.assertEqual(spool["state"], "degraded")
+            recommended = spool["recommended_action"]
+            # 0.4.1 through 0.4.10 were never published to PyPI, so the old
+            # hint named a version the command it printed could not install.
+            self.assertIn("0.4.11", recommended["command"])
+            self.assertNotIn("evalctl doctor", recommended["command"])
+
+    def test_doctor_exit_code_is_zero_even_with_an_unhealthy_component(self) -> None:
+        # Pinned deliberately, not endorsed. evalctl exits 0 with a component in
+        # `unhealthy` state while spoolctl exits 3 with data.ready. Whether
+        # evalctl should follow is an open decision; this test exists so that
+        # changing it is a decision rather than a discovered regression.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = install_fake_spoolctl(cwd)
+            env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            self.run_cli(["run", "code-review", "--run-id", "queued", "--queue", "spoolctl", "--json"], cwd, extra_env=env)
+            bad = install_fake_spoolctl(cwd, contract_version=1)
+            result = self.run_cli(["doctor", "--component", "spoolctl", "--json"], cwd,
+                                  extra_env={"PATH": str(bad) + os.pathsep + os.environ.get("PATH", "")})
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["data"]["components"]["spoolctl"]["state"], "unhealthy")
+            self.assertEqual(payload["data"]["operation_outcome"]["kind"], "unhealthy")
+            self.assertEqual(result.returncode, 0)
+
     def test_plan_is_side_effect_free_and_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
