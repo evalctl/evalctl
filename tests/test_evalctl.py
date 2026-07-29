@@ -1508,6 +1508,135 @@ class EvalctlCliTests(unittest.TestCase):
                     self.assertIn(marker, Path(attempt["stdout_path"]).read_text())
                     self.assertEqual(set(attempt), set(REAL_SPOOLCTL_ATTEMPT_KEYS))
 
+    def classification_run(self, cwd: Path, bindir: Path, run_id: str, knobs: dict[str, str]) -> tuple[dict, dict]:
+        """Run the one-case suite through the fake with the given knobs set.
+
+        Returns (envelope data, runner.json).
+        """
+        env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""), **knobs}
+        data = self.envelope(["run", "code-review", "--run-id", run_id, "--queue", "spoolctl", "--json"], cwd, extra_env=env)["data"]
+        runner_json = json.loads((cwd / "evals" / "runs" / run_id / "cases" / "cr-pass" / "runner.json").read_text())
+        return data, runner_json
+
+    def install_single_case_queue(self, cwd: Path) -> Path:
+        self.envelope(["init", "--json"], cwd)
+        self.keep_first_case_only(cwd)
+        self.assertEqual(self.load_cases(cwd)[0]["id"], "cr-pass")
+        return install_fake_spoolctl(cwd)
+
+    def test_queued_classification_covers_every_failure_reason_row(self) -> None:
+        # Four of these reasons -- worker_crash, canceled, unknown, and any
+        # future member -- cannot be produced by the real binary in CI, and two
+        # more rows are defensive. Without the fake they ship unexercised, which
+        # is how the classification this replaced went two releases with a bug.
+        rows = [
+            ("row-clean", {}, None, False, False, "pass"),
+            ("row-null-nonzero", {"FAKE_SPOOLCTL_FAILURE_REASON": "", "FAKE_SPOOLCTL_EXIT_CODE": "9"}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-null-absent", {"FAKE_SPOOLCTL_FAILURE_REASON": "", "FAKE_SPOOLCTL_EXIT_CODE": ""}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-exit-concrete", {"FAKE_SPOOLCTL_FAILURE_REASON": "process_exit", "FAKE_SPOOLCTL_EXIT_CODE": "7"}, None, False, False, "fail"),
+            ("row-exit-absent", {"FAKE_SPOOLCTL_FAILURE_REASON": "process_exit", "FAKE_SPOOLCTL_EXIT_CODE": ""}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-timeout", {"FAKE_SPOOLCTL_FAILURE_REASON": "timeout"}, "E_RUNNER_TIMEOUT", True, False, "error"),
+            ("row-spawn", {"FAKE_SPOOLCTL_FAILURE_REASON": "spawn_failed"}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-crash", {"FAKE_SPOOLCTL_FAILURE_REASON": "worker_crash"}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-canceled", {"FAKE_SPOOLCTL_FAILURE_REASON": "canceled"}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-unknown", {"FAKE_SPOOLCTL_FAILURE_REASON": "unknown"}, "E_RUNNER_FAILED", False, True, "error"),
+            ("row-future", {"FAKE_SPOOLCTL_FAILURE_REASON": "reason_from_a_future_spoolctl"}, "E_RUNNER_FAILED", False, True, "error"),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            for run_id, knobs, error_code, timed_out, spawn_failed, status in rows:
+                with self.subTest(run_id=run_id):
+                    data, runner_json = self.classification_run(cwd, bindir, run_id, knobs)
+                    self.assertEqual(runner_json["error_code"], error_code)
+                    self.assertEqual(runner_json["timed_out"], timed_out)
+                    self.assertEqual(runner_json["spawn_failed"], spawn_failed)
+                    counts = data["run"]["status_counts"]
+                    self.assertEqual(counts[status], 1)
+                    self.assertEqual(sum(counts.values()), 1)
+
+    def test_queued_unrecognized_failure_reason_is_runner_failed_not_spoolctl_incompatible(self) -> None:
+        # Forward compatibility: a spoolctl that adds an enum member must not
+        # take evalctl down. The run has to complete normally, not raise the
+        # integration-gate error.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            result = self.run_cli(["run", "code-review", "--run-id", "future", "--queue", "spoolctl", "--json"], cwd,
+                                  extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+                                             "FAKE_SPOOLCTL_FAILURE_REASON": "reason_evalctl_has_never_heard_of"})
+            envelope = json.loads(result.stdout)
+            codes = [error["code"] for error in envelope.get("errors") or []]
+            self.assertNotIn("E_SPOOLCTL_INCOMPATIBLE", codes)
+            self.assertEqual(codes, [])
+            runner_json = json.loads((cwd / "evals" / "runs" / "future" / "cases" / "cr-pass" / "runner.json").read_text())
+            self.assertEqual(runner_json["error_code"], "E_RUNNER_FAILED")
+
+    def test_queued_null_failure_reason_with_a_nonzero_exit_is_not_a_scored_failure(self) -> None:
+        # Counter-intuitive on purpose, and the opposite of what evalctl does
+        # everywhere else. Real spoolctl always sets process_exit alongside a
+        # nonzero exit code, so a null reason with one is malformed data rather
+        # than a failing case. Scoring it would let a contradictory payload
+        # produce a result.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            data, runner_json = self.classification_run(cwd, bindir, "null-nonzero",
+                                                        {"FAKE_SPOOLCTL_FAILURE_REASON": "", "FAKE_SPOOLCTL_EXIT_CODE": "3"})
+            self.assertEqual(runner_json["error_code"], "E_RUNNER_FAILED")
+            self.assertEqual(runner_json["exit_code"], 3)
+            self.assertEqual(data["run"]["status_counts"]["error"], 1)
+            self.assertEqual(sum(data["run"]["status_counts"].values()), 1)
+
+    def test_queued_process_exit_without_an_exit_code_is_not_a_pass(self) -> None:
+        # The other counter-intuitive row. process_exit means the process ran
+        # and its exit code is the fact; an attempt claiming it without one is
+        # contradicting its own contract, so it goes to the infrastructure
+        # class rather than being scored as a clean exit.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            data, runner_json = self.classification_run(cwd, bindir, "exit-absent",
+                                                        {"FAKE_SPOOLCTL_FAILURE_REASON": "process_exit", "FAKE_SPOOLCTL_EXIT_CODE": ""})
+            self.assertEqual(runner_json["error_code"], "E_RUNNER_FAILED")
+            self.assertIsNone(runner_json["exit_code"])
+            self.assertEqual(data["run"]["status_counts"]["error"], 1)
+            self.assertEqual(sum(data["run"]["status_counts"].values()), 1)
+
+    def test_queued_duration_ms_is_derived_from_the_attempt_timestamps(self) -> None:
+        # Pinned end to end through the queue, because the old read of a field
+        # spoolctl never emits recorded 0 on every queued case and no test
+        # noticed. Fixed bounds rather than a comparison against an in-process
+        # timing, which is itself variable.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            suite = self.load_suite(cwd)
+            suite["runner"]["argv"] = [sys.executable, "-c", "import time; time.sleep(0.4)"]
+            self.write_suite(cwd, suite)
+            _, runner_json = self.classification_run(cwd, bindir, "timed", {})
+            attempt = self.fake_queue_attempt(cwd, "timed", "cr-pass")
+            self.assertGreaterEqual(runner_json["duration_ms"], 400)
+            self.assertLess(runner_json["duration_ms"], 30000)
+            self.assertEqual(runner_json["duration_ms"],
+                             max(0, round((attempt["finished_at"] - attempt["started_at"]) * 1000)))
+
+    def test_spoolctl_attempt_duration_clamps_reversed_and_missing_timestamps(self) -> None:
+        # Payload shapes no spoolctl produces. They are unit-tested directly
+        # rather than through the fake because giving the fixture a timestamp
+        # knob would grow the control surface for inputs the real tool cannot
+        # emit -- the fake is for reasons CI cannot reach, not for malformed
+        # records.
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": 100.0, "finished_at": 100.25}), 250)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": 100, "finished_at": 101}), 1000)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": 200.0, "finished_at": 100.0}), 0)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"finished_at": 100.0}), 0)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": 100.0}), 0)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({}), 0)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": None, "finished_at": 100.0}), 0)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": "100.0", "finished_at": "101.0"}), 0)
+        self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": float("nan"), "finished_at": 100.0}), 0)
+
     def test_queue_spoolctl_outcome_mapping_and_stdin_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
