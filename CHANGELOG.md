@@ -29,6 +29,16 @@ report projection are unchanged, and report hashes are byte-identical to v0.4.2.
   job now records `E_RUNNER_FAILED` on the case and the run completes. Only a
   payload with no `attempts` key, or a non-list there, is still treated as a
   spoolctl evalctl cannot speak to.
+- **Per-case `job.json` records the queue's state for the job, not the last
+  attempt's.** The value moves from `succeeded` to `done`, and from `failed` or
+  `timed_out` to `dead`; a job canceled before it ran now records `canceled`
+  instead of nothing. evalctl read `state` off the top level of `spoolctl
+  show`, where real spoolctl does not put it -- the job is nested under `job` --
+  so the read always failed and fell through to the attempt's state, a
+  different vocabulary. `job.json` is queue provenance, and the job state is
+  spoolctl's own verdict; the execution detail is in `runner.json` and is
+  unchanged. `job.json` is not part of the report projection, so report hashes
+  are unaffected.
 - A `failure_reason` evalctl does not recognize now maps to `E_RUNNER_FAILED`
   rather than being an error, so a future spoolctl adding an enum member does
   not become an evalctl outage. `E_SPOOLCTL_INCOMPATIBLE` is never raised for
@@ -38,7 +48,10 @@ report projection are unchanged, and report hashes are byte-identical to v0.4.2.
   `failure_reason` -- the inverse of the real tool -- which is why the duration
   bug survived two releases undetected. Fake and real binary are asserted
   against one shared key set, and the real-spoolctl CI job asserts a queued
-  0.5s case records a real elapsed duration.
+  0.5s case records a real elapsed duration. The fixture's `show` envelope was
+  flat where the real one nests the job, which is what hid the dead job-state
+  read above; the envelope's top-level key set is now part of the same
+  two-sided check.
 
 ## 0.4.2 - 2026-07-28
 

@@ -273,6 +273,25 @@ def latest_terminal_attempt(job_detail: dict[str, Any]) -> dict[str, Any] | None
     return attempts[-1] if attempts else None
 
 
+def spoolctl_job_state(job_detail: dict[str, Any]) -> Any:
+    """The queue's own terminal state for the job, from a `spoolctl show` payload.
+
+    This is job.json's provenance field, and it is deliberately the job's state
+    rather than the last attempt's. The job state is spoolctl's own answer to
+    what became of the job; it is defined even when no attempt exists, which is
+    exactly the canceled case; and it does not restate what runner.json already
+    records about the execution. Its vocabulary is coarser -- done, dead,
+    canceled -- because a nonzero exit, a timeout, and a spawn failure are all
+    one job outcome to the queue.
+
+    Real spoolctl nests the job under a `job` key. Reading `state` off the top
+    level found nothing there and fell through to the attempt's state, which is
+    a different vocabulary; the fixture emitted the job flat and hid it.
+    """
+    job = job_detail.get("job")
+    return job.get("state") if isinstance(job, dict) else None
+
+
 def runner_result_for_unrun_job() -> dict[str, Any]:
     """The result for a job that reached a terminal state without ever running.
 
@@ -397,7 +416,7 @@ def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_c
         entry, score_warnings = capture_workspace_after_and_score(prepared, output_text, runner_json)
         warnings.extend(score_warnings)
         write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
-        write_json(prepared["case_dir"] / "job.json", {"job_id": job_doc["job_id"], "state": detail.get("state") or (attempt or {}).get("state")})
+        write_json(prepared["case_dir"] / "job.json", {"job_id": job_doc["job_id"], "state": spoolctl_job_state(detail)})
         entries_by_id[case["id"]] = entry
     case_entries = [entries_by_id[case["id"]] for case in sorted(all_cases, key=lambda c: c["id"])]
     return case_entries, warnings

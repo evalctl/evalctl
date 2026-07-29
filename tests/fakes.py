@@ -14,6 +14,16 @@ REAL_SPOOLCTL_ATTEMPT_KEYS = frozenset({
     "started_at", "state", "stderr_path", "stdout_path", "worker_id", "worker_pid",
 })
 
+# The envelope those attempts arrive in. Real spoolctl's `show` nests the job
+# record and lifts only attempts and events, so a reader that expects the job's
+# own fields at the top level silently gets nothing. The fake emitted the job
+# flat until that cost evalctl a dead read of the job state.
+REAL_SPOOLCTL_SHOW_KEYS = frozenset({"attempts", "events", "job"})
+
+# The job's terminal states, which are coarser than an attempt's. `dead` covers
+# a nonzero exit, a timeout, and a spawn failure alike.
+REAL_SPOOLCTL_TERMINAL_JOB_STATES = frozenset({"canceled", "dead", "done"})
+
 
 def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_shape: str = "real",
                           capability_flags: object | None = None, include_version: bool = True,
@@ -200,7 +210,13 @@ def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_sh
         "    db = val('--db'); job_id = args[-1]\n"
         "    with dblock(db):\n"
         "        data = load(db)\n"
-        "    emit(data['jobs'][job_id])\n"
+        "    job = dict(data['jobs'][job_id])\n"
+        # Real spoolctl nests the job record and lifts only attempts and events
+        # to the top level. Its job.state vocabulary is coarser than an
+        # attempt's: done, dead, or canceled.
+        "    attempts = job.pop('attempts', [])\n"
+        "    job['state'] = {'succeeded': 'done', 'failed': 'dead', 'timed_out': 'dead'}.get(job['state'], job['state'])\n"
+        "    emit({'attempts': attempts, 'events': [], 'job': job})\n"
         "print('bad fake spoolctl invocation', args, file=sys.stderr); raise SystemExit(2)\n"
     )
     script.chmod(0o755)

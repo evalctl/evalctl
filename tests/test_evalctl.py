@@ -24,7 +24,8 @@ from evalctl import suite as suite_module
 from evalctl import run_state
 from evalctl.static_contract import now_iso
 from evalctl.processes import run_process
-from tests.fakes import REAL_SPOOLCTL_ATTEMPT_KEYS, install_fake_inferctl, install_fake_spoolctl, run_fake_tool
+from tests.fakes import (REAL_SPOOLCTL_ATTEMPT_KEYS, REAL_SPOOLCTL_SHOW_KEYS, REAL_SPOOLCTL_TERMINAL_JOB_STATES,
+                         install_fake_inferctl, install_fake_spoolctl, run_fake_tool)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -650,7 +651,7 @@ class EvalctlCliTests(unittest.TestCase):
                                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
                 def read(job_id: str) -> str:
-                    return run_fake_tool(bindir, "spoolctl", ["show", "--db", str(db), "--json", job_id])["data"]["state"]
+                    return run_fake_tool(bindir, "spoolctl", ["show", "--db", str(db), "--json", job_id])["data"]["job"]["state"]
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
                     states = list(pool.map(read, job_ids * 2))
@@ -658,7 +659,7 @@ class EvalctlCliTests(unittest.TestCase):
                 worker.communicate(timeout=60)
 
             self.assertEqual(worker.returncode, 0)
-            self.assertTrue(set(states) <= {"queued", "succeeded"}, f"unexpected states: {sorted(set(states))}")
+            self.assertTrue(set(states) <= {"queued", "done"}, f"unexpected states: {sorted(set(states))}")
             final = run_fake_tool(bindir, "spoolctl", ["wait", "--db", str(db), "--json", *job_ids])
             self.assertTrue(final["data"]["all_succeeded"])
 
@@ -1662,6 +1663,72 @@ class EvalctlCliTests(unittest.TestCase):
             counts = envelope["data"]["run"]["status_counts"]
             self.assertEqual(counts["error"], 1)
             self.assertEqual(sum(counts.values()), 1)
+
+    def test_fake_spoolctl_show_envelope_matches_the_real_shape(self) -> None:
+        # The other half of the drift check tests/test_real_spoolctl.py runs
+        # against the binary. The fake emitted the job record flat, with state
+        # and attempts at the top level, so evalctl's read of the job's own
+        # state passed here and found nothing against the real tool.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            # The dead row needs a runner that really fails: the exit-code knob
+            # rewrites the attempt record only, by design, so it cannot move the
+            # job's state.
+            failing = [sys.executable, "-c", "import sys; sys.exit(7)"]
+            rows = [("env-done", {}, None, "done"),
+                    ("env-canceled", {"FAKE_SPOOLCTL_DROP_ATTEMPTS": "1"}, None, "canceled"),
+                    ("env-dead", {}, failing, "dead")]
+            for run_id, knobs, argv, expected_state in rows:
+                with self.subTest(run_id=run_id):
+                    if argv is not None:
+                        suite = self.load_suite(cwd)
+                        suite["runner"]["argv"] = argv
+                        self.write_suite(cwd, suite)
+                    self.envelope(["run", "code-review", "--run-id", run_id, "--queue", "spoolctl", "--json"], cwd,
+                                  extra_env={**queue_env, **knobs})
+                    db = cwd / "evals" / "runs" / run_id / ".spoolctl.db"
+                    job_id = json.loads((cwd / "evals" / "runs" / run_id / "cases" / "cr-pass" / "job.json").read_text())["job_id"]
+                    payload = run_fake_tool(bindir, "spoolctl", ["show", "--db", str(db), "--json", job_id])["data"]
+                    self.assertEqual(set(payload), set(REAL_SPOOLCTL_SHOW_KEYS))
+                    self.assertNotIn("attempts", payload["job"])
+                    self.assertEqual(payload["job"]["state"], expected_state)
+                    self.assertIn(payload["job"]["state"], REAL_SPOOLCTL_TERMINAL_JOB_STATES)
+
+    def test_queued_job_json_records_the_queue_state_not_the_attempt_state(self) -> None:
+        # job.json is queue provenance, so it carries spoolctl's verdict on the
+        # job. The attempt's own state would restate what runner.json already
+        # records, and does not exist at all for a job no worker ran -- which is
+        # the row that used to write null here.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            failing = [sys.executable, "-c", "import sys; sys.exit(7)"]
+            rows = [("state-done", {}, None, "done"),
+                    ("state-canceled", {"FAKE_SPOOLCTL_DROP_ATTEMPTS": "1"}, None, "canceled"),
+                    ("state-dead", {}, failing, "dead")]
+            for run_id, knobs, argv, expected_state in rows:
+                with self.subTest(run_id=run_id):
+                    if argv is not None:
+                        suite = self.load_suite(cwd)
+                        suite["runner"]["argv"] = argv
+                        self.write_suite(cwd, suite)
+                    self.envelope(["run", "code-review", "--run-id", run_id, "--queue", "spoolctl", "--json"], cwd,
+                                  extra_env={**queue_env, **knobs})
+                    job = json.loads((cwd / "evals" / "runs" / run_id / "cases" / "cr-pass" / "job.json").read_text())
+                    self.assertEqual(job["state"], expected_state)
+                    self.assertTrue(job["job_id"])
+
+    def test_spoolctl_job_state_reads_the_nested_job_and_nothing_else(self) -> None:
+        # Pinned directly, because the bug it replaces was a read that returned
+        # None on every real payload while a flat fixture made it look correct.
+        self.assertEqual(runner.spoolctl_job_state({"job": {"state": "done"}, "attempts": [], "events": []}), "done")
+        self.assertIsNone(runner.spoolctl_job_state({"state": "done", "attempts": []}))
+        self.assertIsNone(runner.spoolctl_job_state({"job": {}}))
+        self.assertIsNone(runner.spoolctl_job_state({"job": None}))
+        self.assertIsNone(runner.spoolctl_job_state({}))
 
     def test_latest_terminal_attempt_separates_an_unrun_job_from_an_unreadable_payload(self) -> None:
         # An empty attempts list is a fact about the job. A missing or non-list
