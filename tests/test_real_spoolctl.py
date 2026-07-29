@@ -25,6 +25,7 @@ import time
 import unittest
 from pathlib import Path
 
+from evalctl import runner
 from evalctl.integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_VERSION
 from evalctl.spoolctl import parse_spoolctl_contract, spoolctl_version_supported
 from tests.fakes import REAL_SPOOLCTL_ATTEMPT_KEYS
@@ -214,6 +215,33 @@ class RealSpoolctlQueueTests(unittest.TestCase):
             in_process_ms = self.runner_json(cwd, "real-duration-sync", case_id)["duration_ms"]
             self.assertGreaterEqual(duration_ms, 400, f"queued duration {duration_ms}ms; in-process was {in_process_ms}ms")
             self.assertLess(duration_ms, 10000, f"queued duration {duration_ms}ms; in-process was {in_process_ms}ms")
+
+    def test_real_canceled_job_reports_no_attempts_and_is_not_an_incompatibility(self) -> None:
+        # Pins the payload the fix is built on. evalctl's own drain loop cannot
+        # be made to lose the cancel race on demand, so the job is queued and
+        # canceled through spoolctl directly, and the real show payload is fed
+        # to the same function the queued path calls.
+        def spoolctl(*args: str) -> dict:
+            result = subprocess.run([SPOOLCTL_BINARY, *args], text=True, timeout=30,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            payload = json.loads(result.stdout)
+            return payload.get("data") or payload
+
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "cancel.db"
+            added = spoolctl("add", "--db", str(db), "--json", "--", sys.executable, "-c", "pass")
+            job_id = str(added["job_id"])
+            canceled = spoolctl("cancel", "--db", str(db), "--json", job_id)
+            self.assertEqual(canceled["state"], "canceled")
+            self.assertFalse(canceled["was_running"], "job was already running; the cancel did not land pre-execution")
+
+            detail = spoolctl("show", "--db", str(db), "--json", job_id)
+            self.assertEqual(detail["attempts"], [], "real spoolctl no longer reports a canceled job with zero attempts")
+            self.assertIsNone(runner.latest_terminal_attempt(detail))
+
+            result = runner.runner_result_for_unrun_job()
+            self.assertTrue(result["spawn_failed"])
+            self.assertFalse(result["timed_out"])
 
     def test_queued_run_records_queue_provenance_in_the_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:

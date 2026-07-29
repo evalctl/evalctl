@@ -22,6 +22,13 @@ report projection are unchanged, and report hashes are byte-identical to v0.4.2.
   have reworded either in any release without evalctl failing loudly. For every
   outcome evalctl can reach, the new mapping agrees with the old one -- this is
   a robustness change, not a correction of past results.
+- **A canceled queued job was reported as a spoolctl incompatibility.** A job
+  canceled before a worker picked it up reports an empty `attempts` list, and
+  the queued path raised `E_SPOOLCTL_INCOMPATIBLE` with exit `3`, telling the
+  operator to upgrade spoolctl for what is an ordinary queue outcome. Such a
+  job now records `E_RUNNER_FAILED` on the case and the run completes. Only a
+  payload with no `attempts` key, or a non-list there, is still treated as a
+  spoolctl evalctl cannot speak to.
 - A `failure_reason` evalctl does not recognize now maps to `E_RUNNER_FAILED`
   rather than being an error, so a future spoolctl adding an enum member does
   not become an evalctl outage. `E_SPOOLCTL_INCOMPATIBLE` is never raised for

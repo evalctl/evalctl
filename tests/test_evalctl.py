@@ -1637,6 +1637,59 @@ class EvalctlCliTests(unittest.TestCase):
         self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": "100.0", "finished_at": "101.0"}), 0)
         self.assertEqual(runner.spoolctl_attempt_duration_ms({"started_at": float("nan"), "finished_at": 100.0}), 0)
 
+    def test_canceled_job_with_no_attempts_is_a_case_error_not_a_spoolctl_incompatibility(self) -> None:
+        # The whole point of the fix. A job somebody canceled before a worker
+        # picked it up is an ordinary queue outcome; reporting it as
+        # E_SPOOLCTL_INCOMPATIBLE told the operator to upgrade spoolctl, which
+        # would never have helped. The run must complete and score the case as
+        # an error.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            bindir = self.install_single_case_queue(cwd)
+            result = self.run_cli(["run", "code-review", "--run-id", "canceled", "--queue", "spoolctl", "--json"], cwd,
+                                  extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+                                             "FAKE_SPOOLCTL_DROP_ATTEMPTS": "1"})
+            envelope = json.loads(result.stdout)
+            codes = [error["code"] for error in envelope.get("errors") or []]
+            self.assertNotIn("E_SPOOLCTL_INCOMPATIBLE", codes)
+            self.assertEqual(codes, [])
+            self.assertNotEqual(result.returncode, 3)
+            runner_json = json.loads((cwd / "evals" / "runs" / "canceled" / "cases" / "cr-pass" / "runner.json").read_text())
+            self.assertEqual(runner_json["error_code"], "E_RUNNER_FAILED")
+            self.assertTrue(runner_json["spawn_failed"])
+            self.assertFalse(runner_json["timed_out"])
+            self.assertIsNone(runner_json["exit_code"])
+            counts = envelope["data"]["run"]["status_counts"]
+            self.assertEqual(counts["error"], 1)
+            self.assertEqual(sum(counts.values()), 1)
+
+    def test_latest_terminal_attempt_separates_an_unrun_job_from_an_unreadable_payload(self) -> None:
+        # An empty attempts list is a fact about the job. A missing or non-list
+        # attempts key is a fact about the spoolctl on the other end, and only
+        # that second one is a compatibility problem.
+        self.assertIsNone(runner.latest_terminal_attempt({"state": "canceled", "attempts": []}))
+        self.assertEqual(runner.latest_terminal_attempt({"attempts": [{"attempt_no": 1}, {"attempt_no": 2}]}), {"attempt_no": 2})
+        for payload in ({}, {"state": "done"}, {"attempts": None}, {"attempts": {}}, {"attempts": "1"}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(static_contract.EvalctlError) as ctx:
+                    runner.latest_terminal_attempt(payload)
+                self.assertEqual(ctx.exception.error["code"], "E_SPOOLCTL_INCOMPATIBLE")
+                self.assertEqual(ctx.exception.exit_code, 3)
+
+    def test_unrun_job_result_names_the_cause_without_claiming_a_process_ran(self) -> None:
+        # No exit code and no signal, because no process produced either. The
+        # stderr text is the only place an operator learns why the case errored,
+        # so it has to say what happened rather than stay empty.
+        result = runner.runner_result_for_unrun_job()
+        self.assertEqual(set(result), {"stdout", "stderr", "timed_out", "spawn_failed", "exit_code", "signal", "duration_ms"})
+        self.assertTrue(result["spawn_failed"])
+        self.assertFalse(result["timed_out"])
+        self.assertIsNone(result["exit_code"])
+        self.assertIsNone(result["signal"])
+        self.assertEqual(result["duration_ms"], 0)
+        self.assertEqual(result["stdout"], "")
+        self.assertIn("canceled", result["stderr"])
+
     def test_queue_spoolctl_outcome_mapping_and_stdin_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)

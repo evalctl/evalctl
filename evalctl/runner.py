@@ -255,11 +255,42 @@ def spoolctl_add_case(db_path: Path, run_id: str, prepared: dict[str, Any]) -> s
     return job_id
 
 
-def latest_terminal_attempt(job_detail: dict[str, Any]) -> dict[str, Any]:
+NO_ATTEMPT_MESSAGE = "spoolctl job produced no attempt; it was canceled or withdrawn before a worker ran it"
+
+
+def latest_terminal_attempt(job_detail: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the job's last attempt, or None when the job never produced one.
+
+    A job canceled before a worker picked it up reports an empty attempts list.
+    That is an ordinary queue outcome, so it must not raise
+    E_SPOOLCTL_INCOMPATIBLE, which blamed tool compatibility for a job somebody
+    canceled. Only a payload with no attempts key, or a non-list there, is a
+    spoolctl evalctl cannot speak to.
+    """
     attempts = job_detail.get("attempts")
-    if not isinstance(attempts, list) or not attempts:
+    if not isinstance(attempts, list):
         raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl show did not include attempts", SPOOLCTL_UPGRADE_HINT, 3)
-    return attempts[-1]
+    return attempts[-1] if attempts else None
+
+
+def runner_result_for_unrun_job() -> dict[str, Any]:
+    """The result for a job that reached a terminal state without ever running.
+
+    Classified exactly as the canceled failure_reason is: an infrastructure
+    failure with no process-exit fact is what E_RUNNER_FAILED already means
+    here. Deliberately does not produce the `canceled` case status. That status
+    is a member of TERMINAL_CASE_STATUSES with no producer, and giving it one is
+    its own contract decision, not a passenger on this fix.
+    """
+    return {
+        "stdout": "",
+        "stderr": NO_ATTEMPT_MESSAGE,
+        "timed_out": False,
+        "spawn_failed": True,
+        "exit_code": None,
+        "signal": None,
+        "duration_ms": 0,
+    }
 
 
 def spoolctl_attempt_duration_ms(attempt: dict[str, Any]) -> int:
@@ -356,14 +387,17 @@ def execute_spoolctl_pending_cases(suite_dir: Path, suite: dict[str, Any], all_c
         job_doc = read_json(prepared["case_dir"] / "job.json")
         detail = spoolctl_json(["show", "--db", str(db_path), "--json", job_doc["job_id"]], timeout=3)
         attempt = latest_terminal_attempt(detail)
-        runner_result = runner_result_from_spoolctl_attempt(attempt, prepared["max_bytes"])
+        if attempt is None:
+            runner_result = runner_result_for_unrun_job()
+        else:
+            runner_result = runner_result_from_spoolctl_attempt(attempt, prepared["max_bytes"])
         output_text, runner_json, normalize_warnings = normalize_runner_artifacts(prepared, runner_result)
         warnings.extend(prepared["warnings"])
         warnings.extend(normalize_warnings)
         entry, score_warnings = capture_workspace_after_and_score(prepared, output_text, runner_json)
         warnings.extend(score_warnings)
         write_terminal_marker(prepared["case_dir"], case["id"], entry["status"])
-        write_json(prepared["case_dir"] / "job.json", {"job_id": job_doc["job_id"], "state": detail.get("state") or attempt.get("state")})
+        write_json(prepared["case_dir"] / "job.json", {"job_id": job_doc["job_id"], "state": detail.get("state") or (attempt or {}).get("state")})
         entries_by_id[case["id"]] = entry
     case_entries = [entries_by_id[case["id"]] for case in sorted(all_cases, key=lambda c: c["id"])]
     return case_entries, warnings

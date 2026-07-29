@@ -37,6 +37,15 @@ def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_sh
         FAKE_SPOOLCTL_EXIT_CODE=<int|empty>    override the synthesized exit
                                                code; empty string means null
 
+    A third replaces the whole record rather than a field of it:
+
+        FAKE_SPOOLCTL_DROP_ATTEMPTS=1          report the job as canceled with
+                                               an empty attempts list
+
+    The real binary does reach that state -- `spoolctl cancel` on a job no
+    worker has picked up yet -- but only through a race evalctl's own drain
+    loop cannot be made to lose on demand.
+
     They are environment variables rather than kwargs here because one
     installed fake must vary per invocation within a single test, and `work` is
     spawned by evalctl and inherits the test process environment. Neither may
@@ -177,6 +186,8 @@ def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_sh
         "                                'finished_at': finished_at, 'started_at': started_at, 'state': state,\n"
         "                                'stderr_path': str(err), 'stdout_path': str(out),\n"
         "                                'worker_id': 'fake-' + str(os.getpid()), 'worker_pid': os.getpid()}]\n"
+        "            if os.environ.get('FAKE_SPOOLCTL_DROP_ATTEMPTS'):\n"
+        "                job['state'] = 'canceled'; job['attempts'] = []\n"
         "        save(db, data)\n"
         "    emit({'drained': True})\n"
         "if cmd == 'wait':\n"
