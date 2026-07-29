@@ -6,3 +6,4 @@ dist/
 build/
 *.egg-info/
 evals/runs/
+.DS_Store
