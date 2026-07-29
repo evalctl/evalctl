@@ -188,6 +188,33 @@ class RealSpoolctlQueueTests(unittest.TestCase):
                     self.assertEqual(set(attempt), set(REAL_SPOOLCTL_ATTEMPT_KEYS))
                     self.assertNotIn("duration_ms", attempt)
 
+    def test_queued_case_records_the_real_elapsed_duration(self) -> None:
+        # The one assertion that would have caught every queued case recording
+        # duration_ms: 0. Fake coverage could not: the fake is what diverged,
+        # emitting a duration_ms field the real tool has never emitted. Report
+        # hash parity could not either -- duration_ms is absent from the report
+        # projection, and the buggy queued run reproduced the correct hash.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            case_id = self.load_cases(cwd)[0]["id"]
+            suite = self.load_suite(cwd)
+            suite["runner"]["argv"] = [sys.executable, "-c", "import time; time.sleep(0.5)"]
+            self.write_suite(cwd, suite)
+
+            self.envelope(["run", "code-review", "--run-id", "real-duration", "--queue", "spoolctl", "--json"], cwd)
+            duration_ms = self.runner_json(cwd, "real-duration", case_id)["duration_ms"]
+
+            # Fixed bounds, not a comparison against the in-process timing. A
+            # relative check drifts with timer noise and is too loose to fail if
+            # a hard-coded zero were ever swapped for a hard-coded small
+            # constant. The in-process value below is a diagnostic only.
+            self.envelope(["run", "code-review", "--run-id", "real-duration-sync", "--json"], cwd)
+            in_process_ms = self.runner_json(cwd, "real-duration-sync", case_id)["duration_ms"]
+            self.assertGreaterEqual(duration_ms, 400, f"queued duration {duration_ms}ms; in-process was {in_process_ms}ms")
+            self.assertLess(duration_ms, 10000, f"queued duration {duration_ms}ms; in-process was {in_process_ms}ms")
+
     def test_queued_run_records_queue_provenance_in_the_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
