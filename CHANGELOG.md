@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.3 - 2026-07-29
+
+Queued runs now read spoolctl's own `failure_reason` enum instead of inferring
+outcomes from two proxies, and record real durations. `contract_version` remains
+`1`; command names, envelope shape, error codes, exit codes, case statuses, and
+report projection are unchanged, and report hashes are byte-identical to v0.4.2.
+
+- **Queued cases recorded `duration_ms: 0`.** The queued path read
+  `attempts[].duration_ms`, a field real spoolctl has never emitted, so the
+  value was always `0` on every queued case. Durations are now derived from the
+  attempt's `started_at` and `finished_at`, clamping to `0` only when a
+  timestamp is missing or unusable. This is the release's one behavior change.
+  `duration_ms` appears in `cases/<id>/runner.json` and in no scored output, so
+  reports and report hashes are unaffected.
+- Queued outcome classification keys on `(failure_reason, exit_code)`. spoolctl
+  has emitted a machine-readable `attempts[].failure_reason` since its 0.4.2,
+  and evalctl's contract `>= 2` floor guarantees it is present. The attempt's
+  `state` field and a prefix match on spoolctl's human-readable error text are
+  no longer consulted. Both were contracts evalctl does not own: spoolctl could
+  have reworded either in any release without evalctl failing loudly. For every
+  outcome evalctl can reach, the new mapping agrees with the old one -- this is
+  a robustness change, not a correction of past results.
+- A `failure_reason` evalctl does not recognize now maps to `E_RUNNER_FAILED`
+  rather than being an error, so a future spoolctl adding an enum member does
+  not become an evalctl outage. `E_SPOOLCTL_INCOMPATIBLE` is never raised for
+  an unrecognized reason, and the required spoolctl version is unchanged.
+- The fake spoolctl test fixture now synthesizes real spoolctl's attempt record
+  field-for-field. It previously emitted `duration_ms` and omitted
+  `failure_reason` -- the inverse of the real tool -- which is why the duration
+  bug survived two releases undetected. Fake and real binary are asserted
+  against one shared key set, and the real-spoolctl CI job asserts a queued
+  0.5s case records a real elapsed duration.
+
 ## 0.4.2 - 2026-07-28
 
 Spoolctl compatibility fix, real-spoolctl CI coverage, and an internal module
