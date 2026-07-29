@@ -369,7 +369,8 @@
       },
       "spoolctl": {
         "available": false,
-        "minimum_version": "0.4.1",
+        "minimum_contract": 2,
+        "minimum_version": "0.4.11",
         "planned": false
       }
     },
@@ -663,7 +664,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:aa4c860b335417850a2c47ae15e92edf73e0d07a65a1b9060114f4545fdbcb0e",
+    "data_hash": "sha256:ded8c6bbe9fac7519e571ab2e1cb9c790cf2ff06cd939a2c805978251b4af9f8",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

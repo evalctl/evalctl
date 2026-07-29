@@ -17,6 +17,7 @@ from .artifacts import (
     write_json,
 )
 from .inferctl import capture_inferctl_preflight
+from .integration_contracts import SPOOLCTL_UPGRADE_HINT
 from .processes import run_process
 from .run_state import (
     clean_pending_case_dirs,
@@ -248,7 +249,7 @@ def spoolctl_add_case(db_path: Path, run_id: str, prepared: dict[str, Any]) -> s
     data = spoolctl_json(args, timeout=3)
     job_id = str(data.get("job_id") or data.get("id") or "")
     if not job_id:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl add did not return data.job_id", "upgrade spoolctl to >= 0.4.1", 3)
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl add did not return data.job_id", SPOOLCTL_UPGRADE_HINT, 3)
     write_json(prepared["case_dir"] / "job.json", {"job_id": job_id, "state": data.get("state", "queued")})
     return job_id
 
@@ -256,7 +257,7 @@ def spoolctl_add_case(db_path: Path, run_id: str, prepared: dict[str, Any]) -> s
 def latest_terminal_attempt(job_detail: dict[str, Any]) -> dict[str, Any]:
     attempts = job_detail.get("attempts")
     if not isinstance(attempts, list) or not attempts:
-        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl show did not include attempts", "upgrade spoolctl to >= 0.4.1", 3)
+        raise EvalctlError("E_SPOOLCTL_INCOMPATIBLE", "spoolctl show did not include attempts", SPOOLCTL_UPGRADE_HINT, 3)
     return attempts[-1]
 
 

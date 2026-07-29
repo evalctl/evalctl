@@ -10,6 +10,7 @@ from typing import Any
 
 from . import __version__
 from .inferctl import inferctl_binary, inferctl_capabilities, inferctl_verb_names
+from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_VERSION
 from .reports import report_data
 from .run_state import classify_run_dir, runs_root, runs_with_inferctl_state, runs_with_queue_state
 from .spoolctl import probe_spoolctl
@@ -82,14 +83,41 @@ def probe_spoolctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, A
         return component(state, "fast mode used PATH-only spoolctl check", observed={"binary": binary, "queued_runs": queued})
     if binary is None:
         state = "degraded" if queued else "not_configured"
-        recommended = action("install spoolctl >= 0.4.1 or run without --queue spoolctl", "Queued state exists but spoolctl is absent.") if queued else None
+        recommended = action(
+            f"pip install 'spoolctl>={MINIMUM_SPOOLCTL_VERSION}'",
+            "Queued state exists but spoolctl is absent.",
+            alternatives=["run without --queue spoolctl"],
+        ) if queued else None
         return component(state, "spoolctl is not available on PATH", observed={"queued_runs": queued}, recommended_action=recommended)
     try:
         data = probe_spoolctl(timeout=3)
-        return component("healthy", "spoolctl is compatible", observed={"version": data.get("version") or data.get("tool_version"), "queued_runs": queued})
+        return component("healthy", "spoolctl is compatible", observed={
+            "version": data.get("version") or data.get("tool_version"),
+            "contract_version": data.get("contract_version"),
+            "minimum_contract": MINIMUM_SPOOLCTL_CONTRACT,
+            "queued_runs": queued,
+        })
     except EvalctlError as exc:
         state = "unhealthy" if queued else "degraded"
-        return component(state, "spoolctl is present but not compatible or responsive", observed={"queued_runs": queued}, errors=[exc.error], recommended_action=action("evalctl doctor --component spoolctl --fast --json", "Use fast diagnostics or inspect spoolctl separately."))
+        # Diagnosing correctly and then prescribing a re-run of the diagnosis is
+        # a doctor-quality defect: this branch used to recommend
+        # `evalctl doctor --component spoolctl --fast --json`. Recommend a fix,
+        # and name a version that the printed command can actually install.
+        return component(
+            state,
+            "spoolctl is present but not compatible or responsive",
+            observed={
+                "queued_runs": queued,
+                "contract_version": exc.error.get("observed_contract"),
+                "minimum_contract": MINIMUM_SPOOLCTL_CONTRACT,
+            },
+            errors=[exc.error],
+            recommended_action=action(
+                f"pip install --upgrade 'spoolctl>={MINIMUM_SPOOLCTL_VERSION}'",
+                exc.error.get("message") or "spoolctl does not meet evalctl's queue requirements.",
+                alternatives=["run without --queue spoolctl"],
+            ),
+        )
 
 
 def probe_inferctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, Any]:
@@ -106,7 +134,7 @@ def probe_inferctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, A
             return component("degraded", "inferctl is present but lacks preflight support", observed={"contract_version": data.get("contract_version"), "verbs": sorted(verbs)}, recommended_action=action("inferctl capabilities --json", "Inspect inferctl capabilities."))
         return component("healthy", "inferctl preflight support is available", observed={"contract_version": data.get("contract_version"), "verbs": sorted(verbs), "route_available": "route" in verbs})
     except EvalctlError as exc:
-        return component("degraded", "inferctl is present but not compatible or responsive", errors=[exc.error], observed={"provenance_runs": provenance_runs}, recommended_action=action("evalctl doctor --component inferctl --fast --json", "Use fast diagnostics or inspect inferctl separately."))
+        return component("degraded", "inferctl is present but not compatible or responsive", errors=[exc.error], observed={"provenance_runs": provenance_runs}, recommended_action=action("inferctl capabilities --json", "Inspect inferctl directly; evalctl runs without it."))
 
 
 def probe_runner_safety() -> dict[str, Any]:
