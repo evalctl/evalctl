@@ -276,15 +276,45 @@ def spoolctl_attempt_duration_ms(attempt: dict[str, Any]) -> int:
     return max(0, round((finished - started) * 1000)) if usable else 0
 
 
+def classify_spoolctl_attempt(failure_reason: Any, exit_code: Any) -> tuple[bool, bool]:
+    """Map a queued attempt's (failure_reason, exit_code) to (timed_out, spawn_failed).
+
+    Keyed on spoolctl's failure_reason enum, which the contract >= 2 floor
+    guarantees on every attempt, and never on the attempt's state. This replaced
+    a state-set test and a prefix match on spoolctl's human error text. Both were
+    contracts evalctl does not own: spoolctl could reword either in any release
+    and evalctl would not fail loudly, it would silently reclassify a spawn
+    failure as a clean exit. Do not restore the state check as a safety net --
+    two sources for one fact is how they drift, and state is the source being
+    retired.
+
+    An unrecognized reason falls through to the `unknown` behavior and is never
+    an error, so a sibling tool adding an enum member cannot take evalctl down.
+
+    The two rows below that look wrong and are not: a null reason with a nonzero
+    exit, and process_exit with no exit code, both land in the infrastructure
+    class rather than being scored. Real spoolctl always pairs a nonzero exit
+    with process_exit, so either shape is a payload contradicting its own
+    contract. Conservative in the only direction that cannot manufacture a pass.
+    """
+    concrete_exit = isinstance(exit_code, int) and not isinstance(exit_code, bool)
+    if failure_reason == "timeout":
+        return True, False
+    if failure_reason is None and concrete_exit and exit_code == 0:
+        return False, False
+    if failure_reason == "process_exit" and concrete_exit:
+        return False, False
+    return False, True
+
+
 def runner_result_from_spoolctl_attempt(attempt: dict[str, Any], max_bytes: int) -> dict[str, Any]:
     stdout_path = attempt.get("stdout_path")
     stderr_path = attempt.get("stderr_path")
     stdout = Path(stdout_path).read_text(errors="replace") if stdout_path else ""
+    # attempt["error"] is display text here, never classification input.
     stderr = Path(stderr_path).read_text(errors="replace") if stderr_path else str(attempt.get("error") or "")
-    state = attempt.get("state")
     exit_code = attempt.get("exit_code")
-    timed_out = state == "timed_out" and exit_code is None
-    spawn_failed = exit_code is None and (state in {"failed", "abandoned", "canceled"} or str(attempt.get("error") or "").startswith("spawn failed:"))
+    timed_out, spawn_failed = classify_spoolctl_attempt(attempt.get("failure_reason"), exit_code)
     return {
         "stdout": stdout,
         "stderr": stderr,
