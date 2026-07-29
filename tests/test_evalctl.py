@@ -223,7 +223,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
             self.assertEqual(caps["meta"]["data_hash"], "sha256:ded8c6bbe9fac7519e571ab2e1cb9c790cf2ff06cd939a2c805978251b4af9f8")
-            self.assertEqual(caps["tool_version"], "0.4.1")
+            self.assertEqual(caps["tool_version"], "0.4.2")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])

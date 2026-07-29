@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 - 2026-07-28
 
-Spoolctl compatibility fix. `contract_version` remains `1`; command names,
-envelope shape, artifact layout, and report projection remain compatible with
-v0.4.
+Spoolctl compatibility fix, real-spoolctl CI coverage, and an internal module
+split. `contract_version` remains `1`; command names, envelope shape, artifact
+layout, and report projection remain compatible with v0.4.
+
+This release also carries everything listed under `0.4.1` below, which was
+never tagged or published.
 
 - Queued spoolctl runs now require `spoolctl >= 0.4.11` speaking contract
   `>= 2`. The previous minimum, `0.4.1`, was never published to PyPI, and the
@@ -26,8 +29,27 @@ v0.4.
 - `evalctl doctor` recommends installing or upgrading spoolctl instead of
   re-running `evalctl doctor`, and names a version that the command it prints
   can install. Doctor exit codes are unchanged.
+- Queued-run semantics are now covered against a real spoolctl binary, not only
+  the fake fixture. A `queue-integration` CI job installs pinned
+  `spoolctl==0.4.11` and runs `tests/test_real_spoolctl.py`, which checks report
+  hash parity between queued and in-process runs, timeout and spawn-failure
+  mapping, the `stdin:"task"` wrapper, resume, and queue provenance. Setting
+  `EVALCTL_REQUIRE_REAL_SPOOLCTL=1` turns a missing or below-floor binary into a
+  hard failure, so the job cannot pass by skipping its own tests. Ordinary local
+  test discovery still passes with spoolctl absent.
+- The fake spoolctl fixture writes its database through a same-directory
+  temporary file and `os.replace`, serializes the full load-mutate-save under a
+  lock, and assigns job ids from a persisted counter. This fixes intermittent
+  Python 3.13 CI failures caused by a reader observing a partially written
+  fixture database.
+- `evalctl/cli.py` was split into focused modules covering static contracts,
+  process execution, artifacts, scoring, optional integrations, run state,
+  runner orchestration, suite reports, doctor, and command handlers. No public
+  behavior changed: the CLI grammar, envelopes, and goldens are identical.
 
 ## 0.4.1 - 2026-07-24
+
+Never tagged or published; these changes first ship in `0.4.2` above.
 
 CLI grammar hardening and refactor-safety patch. `contract_version` remains
 `1`; command names, envelope shape, artifact layout, report projection, and
