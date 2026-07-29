@@ -24,7 +24,7 @@ from evalctl import suite as suite_module
 from evalctl import run_state
 from evalctl.static_contract import now_iso
 from evalctl.processes import run_process
-from tests.fakes import install_fake_inferctl, install_fake_spoolctl, run_fake_tool
+from tests.fakes import REAL_SPOOLCTL_ATTEMPT_KEYS, install_fake_inferctl, install_fake_spoolctl, run_fake_tool
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1411,6 +1411,102 @@ class EvalctlCliTests(unittest.TestCase):
             bindir = install_fake_spoolctl(cwd, version="0.4.0")
             incompatible = self.run_cli(["run", "code-review", "--run-id", "bad", "--queue", "spoolctl", "--json"], cwd, expect=3, extra_env={"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")})
             self.assertEqual(json.loads(incompatible.stdout)["errors"][0]["code"], "E_SPOOLCTL_INCOMPATIBLE")
+
+    def fake_queue_attempt(self, cwd: Path, run_id: str, case_id: str) -> dict:
+        """Return the raw attempt record the fake queue synthesized for a case.
+
+        Read straight out of the fake's database rather than out of runner.json,
+        because the point is what the fixture emitted, not what evalctl made of
+        it.
+        """
+        db = json.loads((cwd / "evals" / "runs" / run_id / ".spoolctl.db").read_text())
+        for job in db["jobs"].values():
+            if job["key"].endswith(":" + case_id):
+                return job["attempts"][-1]
+        self.fail(f"fake queue has no job for case {case_id}")
+
+    def test_fake_spoolctl_attempt_payload_matches_the_real_field_set(self) -> None:
+        # The fixture used to be written from evalctl's expectations: it emitted
+        # duration_ms, which real spoolctl has never emitted, and omitted
+        # failure_reason, which real spoolctl always emits. That divergence hid
+        # a live duration bug from the whole suite.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = install_fake_spoolctl(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            self.keep_first_case_only(cwd)
+            case_id = self.load_cases(cwd)[0]["id"]
+
+            self.envelope(["run", "code-review", "--run-id", "shape", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            attempt = self.fake_queue_attempt(cwd, "shape", case_id)
+            self.assertEqual(set(attempt), set(REAL_SPOOLCTL_ATTEMPT_KEYS))
+            self.assertNotIn("duration_ms", attempt)
+            self.assertIsNone(attempt["failure_reason"])
+            self.assertEqual(attempt["exit_code"], 0)
+            self.assertEqual(attempt["state"], "succeeded")
+            self.assertIsInstance(attempt["started_at"], float)
+            self.assertIsInstance(attempt["finished_at"], float)
+            self.assertGreaterEqual(attempt["finished_at"], attempt["started_at"])
+
+            # Reasons must match what the real binary produces for the same
+            # three failures, or the fake teaches the classification wrong rows.
+            suite = self.load_suite(cwd)
+            suite["runner"]["argv"] = [sys.executable, "-c", "import sys; sys.exit(7)"]
+            self.write_suite(cwd, suite)
+            self.envelope(["run", "code-review", "--run-id", "exit7", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            exited = self.fake_queue_attempt(cwd, "exit7", case_id)
+            self.assertEqual((exited["failure_reason"], exited["exit_code"]), ("process_exit", 7))
+
+            suite["runner"]["argv"] = [sys.executable, "-c", "import time; time.sleep(30)"]
+            suite["runner"]["timeout_seconds"] = 1
+            self.write_suite(cwd, suite)
+            self.envelope(["run", "code-review", "--run-id", "slow", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            timed_out = self.fake_queue_attempt(cwd, "slow", case_id)
+            self.assertEqual((timed_out["failure_reason"], timed_out["exit_code"]), ("timeout", None))
+
+            suite["runner"]["argv"] = ["evalctl-no-such-runner-binary"]
+            suite["runner"]["timeout_seconds"] = 30
+            self.write_suite(cwd, suite)
+            self.envelope(["run", "code-review", "--run-id", "nospawn", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
+            unspawned = self.fake_queue_attempt(cwd, "nospawn", case_id)
+            self.assertEqual((unspawned["failure_reason"], unspawned["exit_code"]), ("spawn_failed", None))
+
+    def test_fake_spoolctl_knobs_rewrite_the_attempt_without_touching_the_subprocess(self) -> None:
+        # The knobs exist so the fake can synthesize the reasons the real binary
+        # cannot be driven to produce in CI. If they could also change whether
+        # the command runs, the fixture would be faking the test's expectations
+        # again rather than faking spoolctl.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            bindir = install_fake_spoolctl(cwd)
+            queue_env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            self.keep_first_case_only(cwd)
+            case_id = self.load_cases(cwd)[0]["id"]
+            marker = "knob-did-not-suppress-the-subprocess"
+            suite = self.load_suite(cwd)
+            suite["runner"]["argv"] = [sys.executable, "-c", f"print({marker!r})"]
+            self.write_suite(cwd, suite)
+
+            for run_id, knobs, expected_reason, expected_code in [
+                ("knob-crash", {"FAKE_SPOOLCTL_FAILURE_REASON": "worker_crash"}, "worker_crash", 0),
+                ("knob-future", {"FAKE_SPOOLCTL_FAILURE_REASON": "reason_from_a_future_spoolctl"}, "reason_from_a_future_spoolctl", 0),
+                ("knob-blank-reason", {"FAKE_SPOOLCTL_FAILURE_REASON": ""}, None, 0),
+                ("knob-code", {"FAKE_SPOOLCTL_EXIT_CODE": "42"}, None, 42),
+                ("knob-blank-code", {"FAKE_SPOOLCTL_EXIT_CODE": ""}, None, None),
+                ("knob-both", {"FAKE_SPOOLCTL_FAILURE_REASON": "canceled", "FAKE_SPOOLCTL_EXIT_CODE": ""}, "canceled", None),
+            ]:
+                with self.subTest(run_id=run_id):
+                    self.envelope(["run", "code-review", "--run-id", run_id, "--queue", "spoolctl", "--json"], cwd,
+                                  extra_env={**queue_env, **knobs})
+                    attempt = self.fake_queue_attempt(cwd, run_id, case_id)
+                    self.assertEqual(attempt["failure_reason"], expected_reason)
+                    self.assertEqual(attempt["exit_code"], expected_code)
+                    # The real command still ran, and its stdout was still
+                    # captured, with the knob set.
+                    self.assertIn(marker, Path(attempt["stdout_path"]).read_text())
+                    self.assertEqual(set(attempt), set(REAL_SPOOLCTL_ATTEMPT_KEYS))
 
     def test_queue_spoolctl_outcome_mapping_and_stdin_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as td:

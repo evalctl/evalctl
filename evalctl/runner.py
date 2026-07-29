@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import math
 import os
 import shutil
 import subprocess
@@ -261,6 +262,20 @@ def latest_terminal_attempt(job_detail: dict[str, Any]) -> dict[str, Any]:
     return attempts[-1]
 
 
+def spoolctl_attempt_duration_ms(attempt: dict[str, Any]) -> int:
+    """Derive a queued attempt's duration from its timestamps.
+
+    Real spoolctl emits started_at and finished_at as epoch-second floats and
+    has never emitted duration_ms. Reading duration_ms recorded 0 on every
+    queued case for two releases, so there is deliberately no fallback to it.
+    """
+    started = attempt.get("started_at")
+    finished = attempt.get("finished_at")
+    usable = all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                 for value in (started, finished))
+    return max(0, round((finished - started) * 1000)) if usable else 0
+
+
 def runner_result_from_spoolctl_attempt(attempt: dict[str, Any], max_bytes: int) -> dict[str, Any]:
     stdout_path = attempt.get("stdout_path")
     stderr_path = attempt.get("stderr_path")
@@ -277,7 +292,7 @@ def runner_result_from_spoolctl_attempt(attempt: dict[str, Any], max_bytes: int)
         "spawn_failed": spawn_failed,
         "exit_code": exit_code,
         "signal": None,
-        "duration_ms": int(attempt.get("duration_ms") or 0),
+        "duration_ms": spoolctl_attempt_duration_ms(attempt),
     }
 
 

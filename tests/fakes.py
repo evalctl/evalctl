@@ -4,10 +4,44 @@ import json
 import subprocess
 from pathlib import Path
 
+# The attempt keys real spoolctl 0.4.11 emits, observed by driving the binary to
+# each terminal state. The fake is asserted equal to this set and so is the real
+# binary, so drift on either side fails a test instead of going unnoticed for
+# releases -- which is how duration_ms, a field only the fake ever emitted,
+# stayed in evalctl's read path unchallenged.
+REAL_SPOOLCTL_ATTEMPT_KEYS = frozenset({
+    "attempt_no", "error", "exit_code", "failure_reason", "finished_at",
+    "started_at", "state", "stderr_path", "stdout_path", "worker_id", "worker_pid",
+})
+
 
 def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_shape: str = "real",
                           capability_flags: object | None = None, include_version: bool = True,
                           data_version: str | None = None, contract_version: object = 2) -> Path:
+    """Install a fake spoolctl whose attempt records match the real 0.4.11 shape.
+
+    The synthesized attempt carries the real key set -- attempt_no, error,
+    exit_code, failure_reason, finished_at, started_at, state, stderr_path,
+    stdout_path, worker_id, worker_pid -- and no duration_ms, which real
+    spoolctl has never emitted. Writing the fixture from evalctl's expectations
+    instead of spoolctl's output is what hid the duration_ms: 0 bug for two
+    releases.
+
+    Two environment variables, read by the `work` path at the moment the
+    attempt record is synthesized, cover the failure_reason values the real
+    binary cannot be driven to produce in CI (worker_crash, canceled, unknown,
+    and any future member):
+
+        FAKE_SPOOLCTL_FAILURE_REASON=<string>  override the synthesized reason;
+                                               empty string means null
+        FAKE_SPOOLCTL_EXIT_CODE=<int|empty>    override the synthesized exit
+                                               code; empty string means null
+
+    They are environment variables rather than kwargs here because one
+    installed fake must vary per invocation within a single test, and `work` is
+    spawned by evalctl and inherits the test process environment. Neither may
+    change whether or how the real subprocess runs.
+    """
     bindir = cwd / "bin"
     bindir.mkdir(exist_ok=True)
     script = bindir / "spoolctl"
@@ -105,24 +139,44 @@ def install_fake_spoolctl(cwd: Path, *, version: str = "0.4.11", capabilities_sh
         "    db = val('--db')\n"
         "    with dblock(db):\n"
         "        data = load(db)\n"
-        "        base = Path(db).parent\n"
+        # Absolute, because that is what real spoolctl records. A relative path
+        # only resolves for a reader that happens to share the queue's cwd.
+        "        base = Path(db).parent.resolve()\n"
         "        for job in data['jobs'].values():\n"
         "            if job['state'] not in ('queued', 'running'): continue\n"
         "            out = base / (job['id'] + '.stdout.txt'); err = base / (job['id'] + '.stderr.txt')\n"
         "            env = os.environ.copy(); env.update(job['env'])\n"
-        "            start = time.time()\n"
+        "            started_at = time.time()\n"
         "            try:\n"
         "                res = subprocess.run(job['command'], cwd=job['cwd'], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=job['timeout'])\n"
         "                out.write_text(res.stdout); err.write_text(res.stderr)\n"
-        "                state = 'succeeded' if res.returncode == 0 else 'failed'; exit_code = res.returncode; error = None\n"
+        "                exit_code = res.returncode\n"
+        "                if exit_code == 0:\n"
+        "                    state = 'succeeded'; reason = None; error = None\n"
+        "                else:\n"
+        "                    state = 'failed'; reason = 'process_exit'; error = 'exit ' + str(exit_code)\n"
         "            except subprocess.TimeoutExpired as exc:\n"
         "                out.write_text((exc.stdout or '') if isinstance(exc.stdout, str) else (exc.stdout or b'').decode('utf-8', 'replace'))\n"
         "                err.write_text((exc.stderr or '') if isinstance(exc.stderr, str) else (exc.stderr or b'').decode('utf-8', 'replace'))\n"
-        "                state = 'timed_out'; exit_code = None; error = 'timed out'\n"
+        "                state = 'timed_out'; exit_code = None; reason = 'timeout'; error = 'timed out after ' + str(job['timeout']) + 's'\n"
         "            except OSError as exc:\n"
-        "                out.write_text(''); err.write_text(str(exc)); state = 'failed'; exit_code = None; error = 'spawn failed: ' + str(exc)\n"
+        "                out.write_text(''); err.write_text(str(exc))\n"
+        "                state = 'failed'; exit_code = None; reason = 'spawn_failed'; error = 'spawn failed: ' + str(exc)\n"
+        "            finished_at = time.time()\n"
+        # The knobs are applied here, after the subprocess has already run and
+        # its streams are on disk, so they can only rewrite the synthesized
+        # attempt record. A knob able to change whether or how the command runs
+        # would make this a fake of evalctl's expectations again.
+        "            if 'FAKE_SPOOLCTL_FAILURE_REASON' in os.environ:\n"
+        "                reason = os.environ['FAKE_SPOOLCTL_FAILURE_REASON'] or None\n"
+        "            if 'FAKE_SPOOLCTL_EXIT_CODE' in os.environ:\n"
+        "                raw_code = os.environ['FAKE_SPOOLCTL_EXIT_CODE']\n"
+        "                exit_code = int(raw_code) if raw_code else None\n"
         "            job['state'] = state\n"
-        "            job['attempts'] = [{'state': state, 'exit_code': exit_code, 'error': error, 'stdout_path': str(out), 'stderr_path': str(err), 'duration_ms': int((time.time()-start)*1000)}]\n"
+        "            job['attempts'] = [{'attempt_no': 1, 'error': error, 'exit_code': exit_code, 'failure_reason': reason,\n"
+        "                                'finished_at': finished_at, 'started_at': started_at, 'state': state,\n"
+        "                                'stderr_path': str(err), 'stdout_path': str(out),\n"
+        "                                'worker_id': 'fake-' + str(os.getpid()), 'worker_pid': os.getpid()}]\n"
         "        save(db, data)\n"
         "    emit({'drained': True})\n"
         "if cmd == 'wait':\n"

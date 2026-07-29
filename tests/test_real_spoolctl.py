@@ -27,6 +27,7 @@ from pathlib import Path
 
 from evalctl.integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_VERSION
 from evalctl.spoolctl import parse_spoolctl_contract, spoolctl_version_supported
+from tests.fakes import REAL_SPOOLCTL_ATTEMPT_KEYS
 
 ROOT = Path(__file__).resolve().parents[1]
 CMD = [sys.executable, "-m", "evalctl"]
@@ -164,6 +165,28 @@ class RealSpoolctlQueueTests(unittest.TestCase):
             queued = self.envelope(["run", "code-review", "--run-id", "real-queued", "--queue", "spoolctl", "--json"], cwd)
             self.assertEqual(queued["data"]["report_hash"], sync["data"]["report_hash"])
             self.assertEqual(queued["data"]["run"]["status_counts"], sync["data"]["run"]["status_counts"])
+
+    def test_real_attempt_field_set_still_matches_what_the_fake_synthesizes(self) -> None:
+        # Half of a two-sided drift check. tests/fakes.py asserts its
+        # synthesized attempt equals REAL_SPOOLCTL_ATTEMPT_KEYS; this asserts
+        # the real binary does too. Either side moving fails a test, instead of
+        # the fixture quietly teaching evalctl a shape spoolctl does not emit.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "real-fields", "--queue", "spoolctl", "--json"], cwd)
+            db = cwd / "evals" / "runs" / "real-fields" / ".spoolctl.db"
+            job_ids = [json.loads(path.read_text())["job_id"] for path in sorted((cwd / "evals" / "runs" / "real-fields").glob("cases/*/job.json"))]
+            self.assertTrue(job_ids, "queued run wrote no per-case job.json")
+            for job_id in job_ids:
+                detail = json.loads(subprocess.run(
+                    [SPOOLCTL_BINARY, "show", "--db", str(db), "--json", job_id],
+                    text=True, timeout=30, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout)
+                attempts = (detail.get("data") or detail)["attempts"]
+                self.assertTrue(attempts, f"real spoolctl reported no attempts for job {job_id}")
+                for attempt in attempts:
+                    self.assertEqual(set(attempt), set(REAL_SPOOLCTL_ATTEMPT_KEYS))
+                    self.assertNotIn("duration_ms", attempt)
 
     def test_queued_run_records_queue_provenance_in_the_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
