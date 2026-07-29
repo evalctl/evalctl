@@ -1,5 +1,6 @@
 # evalctl
 
+[![PyPI](https://img.shields.io/pypi/v/evalctl.svg)](https://pypi.org/project/evalctl/)
 [![CI](https://github.com/evalctl/evalctl/actions/workflows/ci.yml/badge.svg)](https://github.com/evalctl/evalctl/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -57,7 +58,17 @@ output, and artifact replay from a copied run directory.
 
 Requires Python 3.11+ and has no runtime dependencies (standard library only).
 
-From source:
+```bash
+pip install evalctl
+```
+
+To use the optional spoolctl queue, install it alongside:
+
+```bash
+pip install evalctl "spoolctl>=0.4.11"
+```
+
+For unreleased changes, install from the default branch:
 
 ```bash
 pip install "git+https://github.com/evalctl/evalctl.git"
