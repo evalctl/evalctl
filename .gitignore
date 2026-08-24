@@ -7,3 +7,7 @@ build/
 *.egg-info/
 evals/runs/
 .DS_Store
+
+# uv writes this on `uv run`; evalctl is a published library, so deps resolve
+# from pyproject.toml constraints and the lockfile pins only local dev.
+uv.lock
