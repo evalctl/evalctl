@@ -23,7 +23,7 @@ GLOBAL FLAGS:
   --json           Structured envelope output
   --no-color       Suppress ANSI
   --version        Print version
-  --help, -h       Show help
+  --help, -h       Show help for evalctl or for any verb; never mutates
 
 EXIT CODES: 0 ok; 1 input; 2 safety; 3 environment; 4 transient; 5 conflict; 6 eval failed.
 AGENT/AUTOMATION:

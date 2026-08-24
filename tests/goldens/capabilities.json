@@ -357,8 +357,8 @@
       "inferctl_preflight_provenance"
     ],
     "global_flags": {
-      "--help": "help",
-      "--json": "structured envelope",
+      "--help": "per-verb help, exit 0, no side effects",
+      "--json": "structured envelope; accepted only where the verb's json field is true",
       "--no-color": "suppress ANSI",
       "--version": "version"
     },
@@ -664,7 +664,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:ded8c6bbe9fac7519e571ab2e1cb9c790cf2ff06cd939a2c805978251b4af9f8",
+    "data_hash": "sha256:2e6d5c9059dbf40709eb2e0bbd93996438ef90edeb1f227b957e6857d5cd2d5e",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

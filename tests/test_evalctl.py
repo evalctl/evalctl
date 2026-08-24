@@ -160,6 +160,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assert_json_golden("schema-jobs.json", self.envelope(["schema", "jobs", "--json"], cwd, extra_env=env))
             self.assert_json_golden("schema-plan.json", self.envelope(["schema", "plan", "--json"], cwd, extra_env=env))
             self.assert_text_golden("robot-docs-guide.txt", self.run_cli(["robot-docs", "guide"], cwd, extra_env=env).stdout)
+            self.assert_text_golden("help-run.txt", self.run_cli(["run", "--help"], cwd, extra_env=env).stdout)
 
     def test_normalized_error_envelope_goldens(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -223,7 +224,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:ded8c6bbe9fac7519e571ab2e1cb9c790cf2ff06cd939a2c805978251b4af9f8")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:2e6d5c9059dbf40709eb2e0bbd93996438ef90edeb1f227b957e6857d5cd2d5e")
             self.assertEqual(caps["tool_version"], "0.4.3")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -326,6 +327,69 @@ class EvalctlCliTests(unittest.TestCase):
         for name in static_contract.COMMAND_SPECS:
             self.assertIn(name, help_output)
         self.assertEqual(set(caps["global_flags"]), set(static_contract.GLOBAL_FLAG_SPECS))
+
+    def test_per_verb_help_exists_and_never_mutates(self) -> None:
+        # F12 of the v0.4.3 conformance sweep: --help was a global flag that only
+        # the top-level dispatcher acted on, so `evalctl init --help` scaffolded a
+        # tree and `evalctl run <suite> --help` executed the whole suite.
+        for verb in sorted(static_contract.COMMAND_SPECS):
+            for form in (["--help"], ["-h"]):
+                with self.subTest(verb=verb, form=form[0]), tempfile.TemporaryDirectory() as td:
+                    cwd = Path(td)
+                    result = self.run_cli([verb, *form], cwd, extra_env={"PATH": "/nonexistent"})
+                    self.assertTrue(result.stdout.startswith(f"evalctl {verb}  "), result.stdout[:120])
+                    self.assertIn("AGENT/AUTOMATION:", result.stdout)
+                    self.assertIn("Machine contract: evalctl capabilities --json", result.stdout)
+                    self.assertEqual(sorted(p.name for p in cwd.iterdir()), [])
+
+    def test_help_on_a_mutating_verb_leaves_the_project_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            env = {"PATH": "/nonexistent"}
+            self.envelope(["init", "--json"], cwd, extra_env=env)
+            runs = cwd / "evals" / "runs"
+            before = sorted(p.name for p in runs.iterdir()) if runs.exists() else []
+            self.run_cli(["run", "code-review", "--help"], cwd, extra_env=env)
+            self.run_cli(["init", "--force", "--help"], cwd, extra_env=env)
+            after = sorted(p.name for p in runs.iterdir()) if runs.exists() else []
+            self.assertEqual(before, after)
+
+    def test_help_detection_follows_the_flag_grammar(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            env = {"PATH": "/nonexistent"}
+            self.envelope(["init", "--json"], cwd, extra_env=env)
+            # --help as the value of a dash-tolerant flag is a value, not a request.
+            missing = self.run_cli(["case", "add", "code-review", "--task", "--help", "--json"], cwd, expect=1, extra_env=env)
+            self.assertEqual(json.loads(missing.stdout)["errors"][0]["flag"], "--task")
+            # After --, it is a positional.
+            after_terminator = self.run_cli(["status", "--", "--help", "--json"], cwd, expect=1, extra_env=env)
+            self.assertNotIn("USAGE:", after_terminator.stdout)
+            # A flag the verb does not have still reaches the parser.
+            unknown = self.run_cli(["status", "--nope"], cwd, expect=1, extra_env=env)
+            self.assertEqual(json.loads(unknown.stdout)["errors"][0]["code"], "E_UNKNOWN_FLAG")
+
+    def test_json_flag_is_rejected_on_verbs_that_declare_no_envelope(self) -> None:
+        # F23. The reject list is derived from CommandSpec.json, the same field
+        # capabilities publishes, so the accepted set cannot drift from the
+        # advertised one.
+        caps = commands.capabilities_data()["verbs"]
+        textual = sorted(name for name, spec in static_contract.COMMAND_SPECS.items() if not spec.json)
+        self.assertEqual(textual, ["robot-docs"])
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            for verb in textual:
+                with self.subTest(verb=verb):
+                    self.assertFalse(caps[verb]["json"])
+                    result = self.run_cli([verb, "guide", "--json"], cwd, expect=1, extra_env={"PATH": "/nonexistent"})
+                    error = json.loads(result.stdout)["errors"][0]
+                    self.assertEqual(error["code"], "E_UNKNOWN_FLAG")
+                    self.assertEqual(error["exit_code"], 1)
+                    self.assertNotIn("--json", error["valid_values"])
+                    # The fuzzy suggestion for --json is --version, which is valid
+                    # syntax with unrelated semantics. It must not be offered.
+                    self.assertNotIn("did_you_mean", error)
+                    self.assertNotIn("corrected_command", error)
 
     def test_capabilities_live_spoolctl_probe_can_flip_available(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1964,7 +2028,9 @@ class EvalctlCliTests(unittest.TestCase):
                 (["suite", "aad", "--json"], "evalctl suite add --json"),
                 (["case", "aad", "--json"], "evalctl case add --json"),
                 (["scorer", "addd", "--json"], "evalctl scorer add --json"),
-                (["robot-docs", "guid", "--json"], "evalctl robot-docs guide --json"),
+                # robot-docs declares json:false, so --json is rejected before the
+                # subcommand is looked at. The envelope still prints: stdout is a pipe.
+                (["robot-docs", "guid"], "evalctl robot-docs guide"),
             ):
                 with self.subTest(args=args):
                     result = self.run_cli(args, cwd, expect=1)

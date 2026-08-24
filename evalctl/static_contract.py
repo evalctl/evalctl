@@ -116,6 +116,19 @@ GLOBAL_FLAG_SPECS = {
     "--help": BOOL,
     "--version": BOOL,
 }
+HELP_FLAGS = frozenset({"--help", "-h"})
+
+
+def global_flag_specs_for(spec: CommandSpec) -> dict[str, FlagSpec]:
+    """Global flags this verb actually accepts.
+
+    Derived from CommandSpec.json, the same field that feeds the capabilities
+    entry, so the accepted set and the advertised set cannot drift.
+    """
+    flags = dict(GLOBAL_FLAG_SPECS)
+    if not spec.json:
+        del flags["--json"]
+    return flags
 
 
 def positive_int_spec(*, maximum: int | None = None) -> FlagSpec:
@@ -267,15 +280,61 @@ GLOBAL FLAGS:
   --json           Structured envelope output
   --no-color       Suppress ANSI
   --version        Print version
-  --help, -h       Show help
+  --help, -h       Show help for evalctl or for any verb; never mutates
 
 EXIT CODES: 0 ok; 1 input; 2 safety; 3 environment; 4 transient; 5 conflict; 6 eval failed.
-AGENT/AUTOMATION:
-  Machine contract: evalctl capabilities --json
-  Workflow guide:   evalctl robot-docs guide
-  Schemas:          evalctl schema <verb> --json
-"""
+{agent_automation_footer()}"""
 
+
+
+def flag_usage(flag: str, spec: FlagSpec) -> str:
+    if spec.kind == "bool":
+        return flag
+    if spec.kind == "enum":
+        return f"{flag} {'|'.join(sorted(spec.choices))}"
+    if spec.kind == "positive_int":
+        if spec.maximum is not None:
+            return f"{flag} N            (1-{spec.maximum})"
+        return f"{flag} N"
+    if spec.kind in {"suite_path", "run_path"}:
+        return f"{flag} PATH"
+    if spec.kind == "safe_id":
+        return f"{flag} ID"
+    if spec.kind == "json_text":
+        return f"{flag} JSON"
+    return f"{flag} TEXT"
+
+
+def agent_automation_footer(verb: str | None = None) -> str:
+    schema_line = f"evalctl schema {verb} --json" if verb in DATA_SCHEMAS else "evalctl schema <verb> --json"
+    return ("AGENT/AUTOMATION:\n"
+            "  Machine contract: evalctl capabilities --json\n"
+            "  Workflow guide:   evalctl robot-docs guide\n"
+            f"  Schemas:          {schema_line}\n")
+
+
+def verb_help_text(spec: CommandSpec) -> str:
+    positionals = "".join(f" <{arg}>" for arg in spec.args)
+    lines = [
+        f"{TOOL} {spec.name}  {spec.description}",
+        "",
+        f"USAGE: {TOOL} {spec.name}{positionals} [flags]",
+        "",
+    ]
+    if spec.subcommands:
+        lines.append("SUBCOMMANDS:")
+        lines.append(f"  {', '.join(sorted(spec.subcommands))}")
+        lines.append("")
+    flags = {**global_flag_specs_for(spec), **dict(spec.flags)}
+    lines.append("FLAGS:")
+    lines.extend(f"  {flag_usage(flag, flags[flag])}" for flag in sorted(flags))
+    lines.append("")
+    lines.append(f"MUTATES: {'yes' if spec.mutates else 'no'}")
+    lines.append(f"JSON ENVELOPE: {'yes' if spec.json else 'no'}")
+    lines.append("EXIT CODES: " + "; ".join(f"{code} {EXIT_CODES[code]['meaning']}" for code in spec.exit_codes))
+    if spec.mega_command is not None:
+        lines.append(f"MEGA-COMMAND: {spec.mega_command}")
+    return "\n".join(lines) + "\n" + agent_automation_footer(spec.name)
 
 
 def capabilities_entry_from_spec(spec: CommandSpec) -> dict[str, Any]:
@@ -326,7 +385,8 @@ def capabilities_data(*, probe_spoolctl_func: Callable[..., dict[str, Any]] | No
         "contract_version": CONTRACT_VERSION,
         "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor", "plan", "inferctl_preflight_provenance"],
         "verbs": verbs,
-        "global_flags": {"--json": "structured envelope", "--help": "help", "--version": "version", "--no-color": "suppress ANSI"},
+        "global_flags": {"--json": "structured envelope; accepted only where the verb's json field is true",
+                         "--help": "per-verb help, exit 0, no side effects", "--version": "version", "--no-color": "suppress ANSI"},
         "exit_codes": {str(k): v for k, v in EXIT_CODES.items()},
         "error_codes": CODE_REGISTRY,
         "env_vars": {

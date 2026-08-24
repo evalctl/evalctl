@@ -19,6 +19,7 @@ from .static_contract import (
     DEFAULT_RESERVATION_TTL_SECONDS,
     DOCTOR_COMPONENTS,
     GLOBAL_FLAG_SPECS,
+    HELP_FLAGS,
     SUBCOMMANDS,
     TOOL,
     VERB_NAMES,
@@ -28,10 +29,12 @@ from .static_contract import (
     ParsedArgs,
     capabilities_data as _static_capabilities_data,
     envelope,
+    global_flag_specs_for,
     help_text,
     robot_docs,
     schema_data,
     stable_json,
+    verb_help_text,
 )
 from .artifacts import (
     load_cases,
@@ -171,6 +174,17 @@ def unknown_flag_error(flag: str, argv: list[str], valid_flags: set[str]) -> Eva
     return EvalctlError("E_UNKNOWN_FLAG", f"unknown flag '{flag}'", "check the command's supported flags", 1, **ctx)
 
 
+def json_unsupported_error(spec: CommandSpec) -> EvalctlError:
+    """--json on a verb that declares json:false.
+
+    Distinct from unknown_flag_error because the fuzzy suggestion for --json is
+    --version, which is valid syntax with unrelated semantics.
+    """
+    valid = sorted(set(global_flag_specs_for(spec)) | set(spec.flags))
+    return EvalctlError("E_UNKNOWN_FLAG", f"unknown flag '--json': {spec.name} has no JSON envelope",
+                        f"{spec.name} returns text on stdout; drop --json", 1, flag="--json", valid_values=valid)
+
+
 def reject_unknown_flags(argv: list[str], stripped_args: list[str], valid_flags: set[str]) -> None:
     for token in stripped_args[1:]:
         if token.startswith("--"):
@@ -183,7 +197,7 @@ def spec_for_argv(argv: list[str]) -> CommandSpec | None:
 
 def flag_specs_for_argv(argv: list[str], valid_flags: set[str] | None = None) -> dict[str, FlagSpec]:
     spec = spec_for_argv(argv)
-    flags: dict[str, FlagSpec] = dict(GLOBAL_FLAG_SPECS)
+    flags: dict[str, FlagSpec] = dict(GLOBAL_FLAG_SPECS) if spec is None else global_flag_specs_for(spec)
     if spec is not None:
         flags.update(spec.flags)
     if valid_flags is not None:
@@ -195,7 +209,7 @@ def flag_specs_for_argv(argv: list[str], valid_flags: set[str] | None = None) ->
 
 def registered_flags_for_argv(argv: list[str], valid_flags: set[str] | None = None) -> set[str]:
     spec = spec_for_argv(argv)
-    flags = set(GLOBAL_FLAG_SPECS)
+    flags = set(GLOBAL_FLAG_SPECS) if spec is None else set(global_flag_specs_for(spec))
     if spec is not None:
         flags.update(spec.flags)
     if valid_flags is not None:
@@ -260,11 +274,41 @@ def validate_flag_value(flag: str, value: str, spec: FlagSpec) -> Any:
     raise AssertionError(f"unsupported flag kind {spec.kind}")
 
 
+def help_requested(args: list[str], spec: CommandSpec) -> bool:
+    """True when --help/-h is a flag of this verb, not a value or a positional.
+
+    Walks the same grammar parse_command_args does so that `case add s --task
+    --help` reads --help as the value of --task, and `-- --help` reads it as a
+    positional. Tolerant where the real parser raises: a malformed argv still
+    reaches the parser and gets its own error.
+    """
+    flags = {**global_flag_specs_for(spec), **dict(spec.flags)}
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--":
+            return False
+        if token in HELP_FLAGS:
+            return True
+        if token.startswith("--") and "=" not in token:
+            flag_spec = flags.get(token)
+            if flag_spec is not None and flag_spec.kind != "bool":
+                i += 2
+                continue
+        i += 1
+    return False
+
+
+def command_verb_help(spec: CommandSpec) -> int:
+    print(verb_help_text(spec), end="")
+    return 0
+
+
 def parse_command_args(argv: list[str], spec: CommandSpec) -> ParsedArgs:
     values: dict[str, Any] = {}
     bools: set[str] = set()
     positionals: list[str] = []
-    flags = {**GLOBAL_FLAG_SPECS, **dict(spec.flags)}
+    flags = {**global_flag_specs_for(spec), **dict(spec.flags)}
     command_flags = set(flags)
     positional_mode = False
     i = 0
@@ -282,6 +326,8 @@ def parse_command_args(argv: list[str], spec: CommandSpec) -> ParsedArgs:
             flag, attached_value = (token.split("=", 1) if "=" in token else (token, None))
             flag_spec = flags.get(flag)
             if flag_spec is None:
+                if flag == "--json" and not spec.json:
+                    raise json_unsupported_error(spec)
                 raise unknown_flag_error(flag, argv, command_flags)
             if flag_spec.kind == "bool":
                 if attached_value is not None:
@@ -1018,11 +1064,14 @@ def report_format_json_requested(argv: list[str]) -> bool:
 
 
 def dispatch(argv: list[str], json_mode: bool, started: float) -> int:
-    if not argv or argv[0] in {"--help", "-h"}:
+    if not argv or argv[0] in HELP_FLAGS:
         return command_help(argv or ["--help"], json_mode, started)
     if argv[0] == "--version":
         return command_version(argv, json_mode, started)
     cmd = argv[0]
+    spec = COMMAND_SPECS.get(cmd)
+    if spec is not None and help_requested(argv[1:], spec):
+        return command_verb_help(spec)
     if cmd == "capabilities":
         return command_capabilities(argv, json_mode, started)
     if cmd == "schema":

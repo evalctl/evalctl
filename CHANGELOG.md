@@ -2,16 +2,36 @@
 
 ## 0.4.3 - 2026-07-29
 
-Queued runs now read spoolctl's own `failure_reason` enum instead of inferring
-outcomes from two proxies, and record real durations. `contract_version` remains
-`1`; command names, envelope shape, error codes, exit codes, case statuses, and
-report projection are unchanged, and report hashes are byte-identical to v0.4.2.
+`--help` now works per verb and no longer runs the verb. Queued runs read
+spoolctl's own `failure_reason` enum instead of inferring outcomes from two
+proxies, and record real durations. `contract_version` remains `1`; command
+names, envelope shape, error codes, exit codes, case statuses, and report
+projection are unchanged, and report hashes are byte-identical to v0.4.2.
+
+- **`evalctl <verb> --help` ran the verb.** `--help` and `--json` were
+  registered as global flags, so they passed the unknown-flag check on every
+  verb and reached handlers that never acted on them; only the top-level
+  dispatcher acted on `--help`. `evalctl init --help` scaffolded a tree and
+  `evalctl run <suite> --help` executed the suite -- the read-only probe an
+  agent reaches for first was, on two verbs, a mutation. `--help` and `-h` are
+  now handled per verb, before the handler, and print that verb's own help at
+  exit 0 with no side effects. Detection follows the flag grammar: `--help` as
+  the value of a dash-tolerant flag is still a value, and after `--` it is still
+  a positional.
+- **`robot-docs guide --json` returned markdown at exit 0.** `capabilities`
+  correctly declares `"json": false` for `robot-docs`, but the flag was accepted
+  and ignored. It is now rejected with `E_UNKNOWN_FLAG` at exit 1. The reject
+  list is derived from the same `CommandSpec.json` field that feeds
+  `capabilities`, so the accepted set cannot drift from the advertised one. The
+  error carries no `did_you_mean`: the nearest flag to `--json` is `--version`,
+  which is valid syntax with unrelated semantics.
 
 - **Queued cases recorded `duration_ms: 0`.** The queued path read
   `attempts[].duration_ms`, a field real spoolctl has never emitted, so the
   value was always `0` on every queued case. Durations are now derived from the
   attempt's `started_at` and `finished_at`, clamping to `0` only when a
-  timestamp is missing or unusable. This is the release's one behavior change.
+  timestamp is missing or unusable. This is the release's one change to
+  recorded run data.
   `duration_ms` appears in `cases/<id>/runner.json` and in no scored output, so
   reports and report hashes are unaffected.
 - Queued outcome classification keys on `(failure_reason, exit_code)`. spoolctl
