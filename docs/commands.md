@@ -32,18 +32,25 @@ version is always `evalctl capabilities --json`; this page is the human summary.
 
 | Command | Purpose |
 | --- | --- |
+| `plan <suite>` | Produce a side-effect-free execution plan; never mutates |
 | `run <suite>` | Run a suite into a portable, resumable run directory |
 | `run --resume <run-id>` | Resume an interrupted run; re-run only unfinished cases |
 | `replay --failed <run-id>` | Re-execute failed/errored cases into a linked partial run |
 
 Key `run` flags: `--jobs N` (bounded parallelism), `--timeout S`, `--run-id ID`,
 `--queue spoolctl --slots N`, `--reservation-ttl S`, and `--fail-on-fail` (exit
-`6` when any case fails instead of `0`).
+`6` when any case fails instead of `0`). `plan` accepts the same execution flags
+as `run` and prints the plan without touching disk.
+
+Both `run` and `plan` also accept `--inferctl-task TASK` for the **planned**
+inferctl integration; it is not yet available, so requesting it records a
+`W_INFERCTL_ABSENT` warning rather than capturing route provenance.
 
 ## Inspecting
 
 | Command | Purpose |
 | --- | --- |
+| `doctor [--component NAME]` | Diagnose runtime, run state, and optional integrations (`--fast` skips slow probes) |
 | `jobs list\|get\|prune` | Inspect and prune local run/reservation/queue state (`--yes`, `--force`) |
 | `status <run-id>` | Diagnose run state and get the recommended next command |
 | `report <run-id>` | Generate a report (`--format markdown\|json`) |

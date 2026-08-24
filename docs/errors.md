@@ -51,10 +51,16 @@ data: `run`/`replay` exit `0` by default (or `6` with `--fail-on-fail`), emit
 | `E_SUITE_NOT_FOUND` | user-input | 1 | envelope |
 | `E_RUN_NOT_FOUND` | user-input | 1 | envelope |
 | `E_RUN_CORRUPT` | user-input | 1 | envelope |
+| `E_UNKNOWN_COMMAND` | user-input | 1 | envelope |
+| `E_UNKNOWN_SUBCOMMAND` | user-input | 1 | envelope |
+| `E_UNKNOWN_FLAG` | user-input | 1 | envelope |
+| `E_UNKNOWN_COMPONENT` | user-input | 1 | envelope |
 | `E_RUNNER_FAILED` | tool-env | 3 | runner_json |
 | `E_RUNNER_TIMEOUT` | tool-env | 3 | runner_json |
 | `E_SPOOLCTL_UNAVAILABLE` | tool-env | 3 | envelope |
 | `E_SPOOLCTL_INCOMPATIBLE` | tool-env | 3 | envelope |
+| `E_INFERCTL_UNAVAILABLE` | tool-env | 3 | envelope |
+| `E_INFERCTL_INCOMPATIBLE` | tool-env | 3 | envelope |
 | `E_SCORER_FAILED` | tool-env | 3 | envelope |
 | `E_SCORER_CASE_FAILED` | tool-env | — | score_json |
 | `E_JOB_TRANSIENT` | transient | 4 | envelope |
@@ -76,6 +82,15 @@ Warnings never fail a command; they annotate the envelope.
 | `W_TEXT_DIFF_APPROXIMATED` | a text diff was approximated |
 | `W_OUTPUT_TRUNCATED` | runner output exceeded the byte cap |
 | `W_PATH_UNREADABLE` | a workspace path was skipped (e.g. non-UTF-8) |
+| `W_INFERCTL_ABSENT` | `--inferctl-task` requested, but inferctl is not installed |
+| `W_INFERCTL_INCOMPATIBLE` | installed inferctl failed the version/contract check |
+| `W_INFERCTL_PREFLIGHT_BLOCKED` | inferctl preflight refused the run |
+| `W_INFERCTL_CAPTURE_FAILED` | inferctl route/provenance capture failed |
+
+The `E_INFERCTL_*` and `W_INFERCTL_*` codes only arise around the **planned**
+inferctl integration, requested with `run`/`plan --inferctl-task`. inferctl is
+not yet available (`capabilities --json` reports it as `planned`), so today the
+request degrades to `W_INFERCTL_ABSENT` rather than capturing route provenance.
 
 ## Common cases
 

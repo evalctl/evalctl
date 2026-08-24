@@ -18,7 +18,8 @@ everything else.
 evalctl run demo --queue spoolctl --slots 4 --json
 ```
 
-Requires spoolctl `>= 0.4.1`. If spoolctl is **absent or incompatible**, a queued
+Requires spoolctl `>= 0.4.11` (queue contract v2). If spoolctl is **absent or
+incompatible**, a queued
 run fails explicitly (`E_SPOOLCTL_UNAVAILABLE` / `E_SPOOLCTL_INCOMPATIBLE`, exit
 `3`). Non-queued runs never touch spoolctl.
 
