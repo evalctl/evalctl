@@ -337,6 +337,23 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn(name, help_output)
         self.assertEqual(set(caps["global_flags"]), set(static_contract.GLOBAL_FLAG_SPECS))
 
+    def test_published_exit_dictionary_matches_the_exits_verbs_declare(self) -> None:
+        # F22 of the v0.4.3 conformance sweep: exit 2 was published as "safety
+        # block" but no verb declared it and nothing could emit it -- a dead code
+        # in the dictionary. Reconcile both directions so a dead code cannot be
+        # published again, and so a verb cannot declare an exit the dictionary
+        # never defined.
+        caps = commands.capabilities_data()
+        published = {int(k) for k in caps["exit_codes"]}
+        declared = set()
+        for spec in static_contract.COMMAND_SPECS.values():
+            declared |= set(spec.exit_codes)
+        self.assertEqual(
+            published,
+            declared,
+            f"published exits {sorted(published)} != verb-declared exits {sorted(declared)}",
+        )
+
     def test_per_verb_help_exists_and_never_mutates(self) -> None:
         # F12 of the v0.4.3 conformance sweep: --help was a global flag that only
         # the top-level dispatcher acted on, so `evalctl init --help` scaffolded a
