@@ -1,7 +1,33 @@
 {
   "commands": [],
   "data": {
-    "definitions": {},
+    "definitions": {
+      "case_status": {
+        "enum": [
+          "error",
+          "fail",
+          "pass"
+        ],
+        "type": "string"
+      },
+      "plan_action": {
+        "enum": [
+          "blocked",
+          "run",
+          "skip_terminal"
+        ],
+        "type": "string"
+      },
+      "run_state": {
+        "enum": [
+          "completed",
+          "orphaned",
+          "running",
+          "stale"
+        ],
+        "type": "string"
+      }
+    },
     "envelope_schema": {
       "properties": {
         "commands": {
@@ -83,7 +109,7 @@
             "type": "array"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/definitions/run_state"
           },
           "total_count": {
             "minimum": 0,
@@ -98,7 +124,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:6c51619952aeecaf2915158c570de05659356ac517a020ef34d8492299a62935",
+    "data_hash": "sha256:bdc97a2dc8ace7c42b57317f118f772d1947898de8ed02a062399c812a3c06a3",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

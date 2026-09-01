@@ -429,12 +429,39 @@ def schema_object(required: list[str], properties: dict[str, Any], *, additional
     return {"type": "object", "required": required, "properties": properties, "additionalProperties": additional}
 
 
+def ref(name: str) -> dict[str, Any]:
+    return {"$ref": f"#/definitions/{name}"}
+
+
+# Output vocabularies published as enums in the schema `definitions` block and
+# referenced from every schema that carries them. Each enum is exactly the set a
+# real run can produce; a test pins each against live output so the two cannot
+# drift. Kept sorted so the schema payload is byte-stable.
+#   case_status -- the per-case result and the keys of status_counts.
+#   run_state   -- how classify_run_dir labels a run directory.
+#   plan_action -- what plan proposes per case.
+# The per-job `state` inside queue_jobs is deliberately NOT enumerated: it is a
+# spoolctl vocabulary that evalctl passes through and does not own.
+DEFINITIONS: dict[str, Any] = {
+    "case_status": {"type": "string", "enum": ["error", "fail", "pass"]},
+    "run_state": {"type": "string", "enum": ["completed", "orphaned", "running", "stale"]},
+    "plan_action": {"type": "string", "enum": ["blocked", "run", "skip_terminal"]},
+}
+
+STATUS_COUNTS_SCHEMA = {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}, "propertyNames": ref("case_status")}
+
+CASE_RESULT_SCHEMA = schema_object(["id", "status", "ok"], {"id": {"type": "string"}, "status": ref("case_status"), "ok": {"type": "boolean"}})
+
+FAILURE_SCHEMA = schema_object(["id", "status", "scores"], {"id": {"type": "string"}, "status": ref("case_status"), "scores": {"type": "array", "items": {"type": "object"}}})
+
+PLAN_CASE_SCHEMA = schema_object(["id", "action", "reason"], {"id": {"type": "string"}, "action": ref("plan_action"), "reason": {"type": "string"}})
+
 RUN_SUMMARY_SCHEMA = schema_object(
     ["ok", "case_count", "status_counts"],
     {
         "ok": {"type": "boolean"},
         "case_count": {"type": "integer", "minimum": 0},
-        "status_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "status_counts": STATUS_COUNTS_SCHEMA,
     },
 )
 
@@ -488,7 +515,7 @@ DATA_SCHEMAS = {
             "execution": {"type": "object"},
             "dependency_graph": {"type": "object"},
             "plan": {"type": "object"},
-            "cases": {"type": "array", "items": {"type": "object"}},
+            "cases": {"type": "array", "items": PLAN_CASE_SCHEMA},
             "warnings": {"type": "array", "items": {"type": "object"}},
             "blocked_by_external": schema_object(["kind", "run_id", "reason", "recommended_command"], {"kind": {"type": "string"}, "run_id": {"type": "string"}, "reason": {"type": "string"}, "clears_when": {"type": "string"}, "recommended_command": {"type": "string"}}),
         },
@@ -505,7 +532,7 @@ DATA_SCHEMAS = {
             "total_count": {"type": "integer", "minimum": 0},
             "run_id": {"type": "string"},
             "run_dir": {"type": "string"},
-            "state": {"type": "string"},
+            "state": ref("run_state"),
             "reservation": {"type": "object"},
             "cases": {"type": "object"},
             "queue_jobs": {"type": "array", "items": {"type": "object"}},
@@ -558,10 +585,10 @@ DATA_SCHEMAS = {
         {
             "run_id": {"type": "string"},
             "run_dir": {"type": "string"},
-            "state": {"type": "string", "enum": ["completed", "running", "stale", "orphaned"]},
+            "state": ref("run_state"),
             "progress": schema_object(["case_count", "terminal", "pending"], {"case_count": {"type": "integer", "minimum": 0}, "terminal": {"type": "integer", "minimum": 0}, "pending": {"type": "integer", "minimum": 0}}),
             "run": RUN_SUMMARY_SCHEMA,
-            "cases": {"type": "array", "items": {"type": "object"}},
+            "cases": {"type": "array", "items": CASE_RESULT_SCHEMA},
             "reservation": {"type": "object"},
             "queue_jobs": {"type": "array", "items": {"type": "object"}},
             "recommended_action": schema_object(["command", "rationale", "alternatives"], {"command": {"type": "string"}, "rationale": {"type": "string"}, "alternatives": {"type": "array", "items": {"type": "string"}}}),
@@ -570,9 +597,9 @@ DATA_SCHEMAS = {
     "report": schema_object(
         ["run", "failures", "cases", "run_id", "report_hash"],
         {
-            "run": schema_object(["ok", "suite", "case_count", "status_counts"], {"ok": {"type": "boolean"}, "suite": {"type": "string"}, "case_count": {"type": "integer", "minimum": 0}, "status_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}}),
-            "failures": {"type": "array", "items": {"type": "object"}},
-            "cases": {"type": "array", "items": {"type": "object"}},
+            "run": schema_object(["ok", "suite", "case_count", "status_counts"], {"ok": {"type": "boolean"}, "suite": {"type": "string"}, "case_count": {"type": "integer", "minimum": 0}, "status_counts": STATUS_COUNTS_SCHEMA}),
+            "failures": {"type": "array", "items": FAILURE_SCHEMA},
+            "cases": {"type": "array", "items": CASE_RESULT_SCHEMA},
             "run_id": {"type": "string"},
             "report_hash": {"type": "string"},
         },
@@ -599,7 +626,9 @@ def schema_data(verb: str | None = None) -> dict[str, Any]:
         if verb not in schemas:
             raise EvalctlError("E_CASE_INVALID", f"unknown schema verb '{verb}'", "try: evalctl capabilities --json", 1)
         schemas = {verb: schemas[verb]}
-    return {"envelope_schema": envelope_schema, "schemas": schemas, "definitions": {}}
+    # definitions are always the full set: a single-verb request must still carry
+    # the definitions its $ref pointers resolve against.
+    return {"envelope_schema": envelope_schema, "schemas": schemas, "definitions": DEFINITIONS}
 
 
 def robot_docs() -> str:

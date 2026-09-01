@@ -164,9 +164,9 @@ class EvalctlCliTests(unittest.TestCase):
             env = {"PATH": "/nonexistent"}
             self.assert_text_golden("help.txt", self.run_cli(["--help"], cwd, extra_env=env).stdout)
             self.assert_json_golden("capabilities.json", self.envelope(["capabilities", "--json"], cwd, extra_env=env))
-            self.assert_json_golden("schema-run.json", self.envelope(["schema", "run", "--json"], cwd, extra_env=env))
-            self.assert_json_golden("schema-jobs.json", self.envelope(["schema", "jobs", "--json"], cwd, extra_env=env))
-            self.assert_json_golden("schema-plan.json", self.envelope(["schema", "plan", "--json"], cwd, extra_env=env))
+            for verb in sorted(static_contract.DATA_SCHEMAS):
+                with self.subTest(schema=verb):
+                    self.assert_json_golden(f"schema-{verb}.json", self.envelope(["schema", verb, "--json"], cwd, extra_env=env))
             self.assert_text_golden("robot-docs-guide.txt", self.run_cli(["robot-docs", "guide"], cwd, extra_env=env).stdout)
             self.assert_text_golden("help-run.txt", self.run_cli(["run", "--help"], cwd, extra_env=env).stdout)
 
@@ -268,7 +268,7 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertIn(verb, caps["data"]["verbs"])
             schema = self.envelope(["schema", "run", "--json"], cwd)
             self.assertTrue(schema["ok"])
-            self.assertEqual(schema["meta"]["data_hash"], "sha256:90d9bb2f67c88bbd3338c3a21f4a5723ee0d6e3b46b19b35f74d98dde31ce2c6")
+            self.assertEqual(schema["meta"]["data_hash"], "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24")
             self.assertIn("run", schema["data"]["schemas"])
             run_schema = schema["data"]["schemas"]["run"]
             self.assertIn("properties", run_schema)
@@ -276,7 +276,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(run_schema["additionalProperties"])
             self.assertIn("queue", run_schema["properties"])
             jobs_schema = self.envelope(["schema", "jobs", "--json"], cwd)
-            self.assertEqual(jobs_schema["meta"]["data_hash"], "sha256:6c51619952aeecaf2915158c570de05659356ac517a020ef34d8492299a62935")
+            self.assertEqual(jobs_schema["meta"]["data_hash"], "sha256:bdc97a2dc8ace7c42b57317f118f772d1947898de8ed02a062399c812a3c06a3")
             self.assertIn("queue_jobs", jobs_schema["data"]["schemas"]["jobs"]["properties"])
 
             all_schemas = self.envelope(["schema", "--json"], cwd)
@@ -286,10 +286,10 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertIn("required", verb_schema)
                 self.assertTrue(verb_schema["additionalProperties"])
             doctor_schema = self.envelope(["schema", "doctor", "--json"], cwd)
-            self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:6582f8cd37fd09b9ad29c9422da0e2418a5d5a6f9c2105e4dd14f149ef11e0e4")
+            self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:08c2d17ff5d14c58b8ede3c893e2a3a0eb230205ee6c1e2d81fba72a1b6616e3")
             self.assertIn("doctor", doctor_schema["data"]["schemas"])
             plan_schema = self.envelope(["schema", "plan", "--json"], cwd)
-            self.assertEqual(plan_schema["meta"]["data_hash"], "sha256:9fdf2004178e59ce0095f1d1601388af1d2a4995e2cb4dad67dfa6e8fee8e911")
+            self.assertEqual(plan_schema["meta"]["data_hash"], "sha256:9f2d8a9a5ab140c1b427cf2f528c6b63aeb3e91f00deb5757d2c3e3c2c8ffb32")
             self.assertIn("plan", plan_schema["data"]["schemas"])
             for verb in ("jobs", "replay", "suite", "case", "scorer", "doctor", "plan"):
                 single_schema = self.envelope(["schema", verb, "--json"], cwd)
@@ -306,6 +306,80 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--inferctl-task TASK", docs.stdout)
             self.assertIn("run --resume", docs.stdout)
             self.assertIn("--queue spoolctl", docs.stdout)
+
+    def test_every_json_verb_has_a_pinned_schema_golden(self) -> None:
+        # Every verb that emits a JSON data payload has a data schema, and every
+        # data schema has a golden. Adding a JSON verb without either fails here.
+        json_verbs = static_contract.VERB_NAMES - {"robot-docs"}
+        self.assertEqual(set(static_contract.DATA_SCHEMAS), json_verbs)
+        for verb in json_verbs:
+            with self.subTest(verb=verb):
+                self.assertTrue((GOLDENS / f"schema-{verb}.json").exists(), f"missing schema golden for {verb}")
+
+    def test_schema_publishes_output_vocabularies_as_enums(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            schema = self.envelope(["schema", "--json"], cwd)["data"]
+            definitions = schema["definitions"]
+            self.assertEqual(definitions["case_status"]["enum"], ["error", "fail", "pass"])
+            self.assertEqual(definitions["run_state"]["enum"], ["completed", "orphaned", "running", "stale"])
+            self.assertEqual(definitions["plan_action"]["enum"], ["blocked", "run", "skip_terminal"])
+
+            # No schema restates a vocabulary inline; the only enums in the whole
+            # payload live in definitions, and every carrier reaches them by $ref.
+            def refs_and_enums(node: object, in_definitions: bool = False) -> tuple[set[str], int]:
+                refs: set[str] = set()
+                enums = 0
+                if isinstance(node, dict):
+                    if "$ref" in node:
+                        refs.add(node["$ref"])
+                    if "enum" in node and not in_definitions:
+                        enums += 1
+                    for key, value in node.items():
+                        child_refs, child_enums = refs_and_enums(value, in_definitions or key == "definitions")
+                        refs |= child_refs
+                        enums += child_enums
+                elif isinstance(node, list):
+                    for value in node:
+                        child_refs, child_enums = refs_and_enums(value, in_definitions)
+                        refs |= child_refs
+                        enums += child_enums
+                return refs, enums
+
+            refs, inline_enums = refs_and_enums(schema)
+            self.assertEqual(inline_enums, 0, "a schema restates an enum instead of referencing definitions")
+            for name in definitions:
+                self.assertIn(f"#/definitions/{name}", refs, f"{name} is published but never referenced")
+
+            # Single-verb requests must still carry the definitions their refs need.
+            self.assertEqual(self.envelope(["schema", "status", "--json"], cwd)["data"]["definitions"], definitions)
+
+    def test_published_case_status_enum_is_exactly_what_a_run_produces(self) -> None:
+        published = set(static_contract.DEFINITIONS["case_status"]["enum"])
+        # The counter that a real run reports through status_counts is seeded with
+        # exactly the status vocabulary; pin the published enum to it so neither
+        # can gain a value the other lacks.
+        self.assertEqual(set(run_state.status_counts([])), published)
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "vocab", "--json"], cwd)
+            report = self.envelope(["report", "vocab", "--format", "json"], cwd)["data"]
+            produced = {case["status"] for case in report["cases"]}
+            self.assertTrue(produced <= published, f"run produced a status outside the published enum: {produced - published}")
+            self.assertTrue(set(report["run"]["status_counts"]) <= published)
+
+    def test_published_run_state_and_plan_action_enums_bound_real_output(self) -> None:
+        run_states = set(static_contract.DEFINITIONS["run_state"]["enum"])
+        plan_actions = set(static_contract.DEFINITIONS["plan_action"]["enum"])
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            plan = self.envelope(["plan", "code-review", "--json"], cwd)["data"]
+            self.assertTrue({case["action"] for case in plan["cases"]} <= plan_actions)
+            self.envelope(["run", "code-review", "--run-id", "state-vocab", "--json"], cwd)
+            status = self.envelope(["status", "state-vocab", "--json"], cwd)["data"]
+            self.assertIn(status["state"], run_states)
 
     def test_static_verb_registry_matches_capabilities(self) -> None:
         self.assertEqual(static_contract.VERB_NAMES, set(commands.capabilities_data()["verbs"]))

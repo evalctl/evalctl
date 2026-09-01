@@ -65,6 +65,20 @@
   Scaffolding into a read-only directory surfaced as an undeclared internal error.
   It is now `E_INIT_UNWRITABLE` (class `tool-env`, exit `3`) naming the OS reason
   and pointing at the write-permission fix.
+- **`schema` now pins every verb and publishes its output vocabularies.** Only
+  three of the fourteen JSON verbs had a schema golden, so `doctor`, `status`,
+  `report`, `replay` and the rest could drift silently; and `definitions` was
+  exported empty, so no output vocabulary was contract. Every JSON verb now has a
+  pinned schema golden, and a test fails if a verb ships without one. The
+  `definitions` block now carries `case_status` (`error`/`fail`/`pass`),
+  `run_state` (`completed`/`orphaned`/`running`/`stale`) and `plan_action`
+  (`blocked`/`run`/`skip_terminal`) as enums, referenced by `$ref` from every
+  schema that carries them -- so an agent branching on case status reads the full
+  set from the contract instead of discovering it by observation. A test pins the
+  published `case_status` enum to exactly the set a real run produces. The per-job
+  `state` inside `queue_jobs` is deliberately left open: it is a spoolctl
+  vocabulary evalctl passes through and does not own. `contract_version` remains
+  `1`; report projection and report hashes are unchanged.
 
 ## 0.4.4 - 2026-09-01
 

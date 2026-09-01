@@ -62,58 +62,29 @@
       "type": "object"
     },
     "schemas": {
-      "run": {
+      "scorer": {
         "additionalProperties": true,
         "properties": {
-          "existing": {
+          "created": {
             "type": "boolean"
           },
-          "queue": {
-            "type": "object"
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
-          "report_hash": {
+          "scorer": {
             "type": "string"
           },
-          "run": {
-            "additionalProperties": true,
-            "properties": {
-              "case_count": {
-                "minimum": 0,
-                "type": "integer"
-              },
-              "ok": {
-                "type": "boolean"
-              },
-              "status_counts": {
-                "additionalProperties": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "propertyNames": {
-                  "$ref": "#/definitions/case_status"
-                },
-                "type": "object"
-              }
-            },
-            "required": [
-              "ok",
-              "case_count",
-              "status_counts"
-            ],
-            "type": "object"
-          },
-          "run_dir": {
-            "type": "string"
-          },
-          "run_id": {
+          "suite": {
             "type": "string"
           }
         },
         "required": [
-          "run_id",
-          "run_dir",
-          "run",
-          "report_hash"
+          "suite",
+          "scorer",
+          "created"
         ],
         "type": "object"
       }
@@ -122,7 +93,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
+    "data_hash": "sha256:15b5c244334bef42cf8319b3f1111bc1689b5bea78cd3b89dcb588dce7b3e9be",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

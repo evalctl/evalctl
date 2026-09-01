@@ -62,14 +62,15 @@
       "type": "object"
     },
     "schemas": {
-      "run": {
+      "replay": {
         "additionalProperties": true,
         "properties": {
-          "existing": {
-            "type": "boolean"
+          "cases_replayed": {
+            "minimum": 0,
+            "type": "integer"
           },
-          "queue": {
-            "type": "object"
+          "replayed_from": {
+            "type": "string"
           },
           "report_hash": {
             "type": "string"
@@ -110,10 +111,8 @@
           }
         },
         "required": [
-          "run_id",
-          "run_dir",
-          "run",
-          "report_hash"
+          "replayed_from",
+          "cases_replayed"
         ],
         "type": "object"
       }
@@ -122,7 +121,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
+    "data_hash": "sha256:1e9a195a438938f182ce4d271bb7e9f65c335174a0fdd9fa11b3651ead9a7942",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

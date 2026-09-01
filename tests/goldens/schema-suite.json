@@ -62,58 +62,30 @@
       "type": "object"
     },
     "schemas": {
-      "run": {
+      "suite": {
         "additionalProperties": true,
         "properties": {
-          "existing": {
+          "created": {
             "type": "boolean"
           },
-          "queue": {
-            "type": "object"
-          },
-          "report_hash": {
-            "type": "string"
-          },
-          "run": {
-            "additionalProperties": true,
-            "properties": {
-              "case_count": {
-                "minimum": 0,
-                "type": "integer"
-              },
-              "ok": {
-                "type": "boolean"
-              },
-              "status_counts": {
-                "additionalProperties": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "propertyNames": {
-                  "$ref": "#/definitions/case_status"
-                },
-                "type": "object"
-              }
+          "files": {
+            "items": {
+              "type": "string"
             },
-            "required": [
-              "ok",
-              "case_count",
-              "status_counts"
-            ],
-            "type": "object"
+            "type": "array"
           },
-          "run_dir": {
+          "suite": {
             "type": "string"
           },
-          "run_id": {
+          "suite_dir": {
             "type": "string"
           }
         },
         "required": [
-          "run_id",
-          "run_dir",
-          "run",
-          "report_hash"
+          "suite",
+          "suite_dir",
+          "created",
+          "files"
         ],
         "type": "object"
       }
@@ -122,7 +94,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
+    "data_hash": "sha256:b320d544752af41834d447a5e7c11999cb81d93372d029d45a9e809e5e7e3eea",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

@@ -62,58 +62,67 @@
       "type": "object"
     },
     "schemas": {
-      "run": {
+      "doctor": {
         "additionalProperties": true,
         "properties": {
-          "existing": {
-            "type": "boolean"
-          },
-          "queue": {
+          "components": {
+            "additionalProperties": {
+              "type": "object"
+            },
             "type": "object"
           },
-          "report_hash": {
-            "type": "string"
+          "fallbacks_active": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           },
-          "run": {
+          "operation_outcome": {
             "additionalProperties": true,
             "properties": {
-              "case_count": {
-                "minimum": 0,
-                "type": "integer"
+              "health_kind": {
+                "type": "string"
               },
-              "ok": {
-                "type": "boolean"
-              },
-              "status_counts": {
-                "additionalProperties": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "propertyNames": {
-                  "$ref": "#/definitions/case_status"
-                },
-                "type": "object"
+              "kind": {
+                "type": "string"
               }
             },
             "required": [
-              "ok",
-              "case_count",
-              "status_counts"
+              "kind",
+              "health_kind"
             ],
             "type": "object"
           },
-          "run_dir": {
-            "type": "string"
-          },
-          "run_id": {
-            "type": "string"
+          "recommended_action": {
+            "additionalProperties": true,
+            "properties": {
+              "alternatives": {
+                "type": "array"
+              },
+              "command": {
+                "type": "string"
+              },
+              "is_destructive": {
+                "type": "boolean"
+              },
+              "rationale": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "rationale",
+              "is_destructive",
+              "alternatives"
+            ],
+            "type": "object"
           }
         },
         "required": [
-          "run_id",
-          "run_dir",
-          "run",
-          "report_hash"
+          "operation_outcome",
+          "components",
+          "recommended_action",
+          "fallbacks_active"
         ],
         "type": "object"
       }
@@ -122,7 +131,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
+    "data_hash": "sha256:08c2d17ff5d14c58b8ede3c893e2a3a0eb230205ee6c1e2d81fba72a1b6616e3",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

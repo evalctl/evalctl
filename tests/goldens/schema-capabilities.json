@@ -62,89 +62,105 @@
       "type": "object"
     },
     "schemas": {
-      "plan": {
+      "capabilities": {
         "additionalProperties": true,
         "properties": {
-          "blocked_by_external": {
-            "additionalProperties": true,
-            "properties": {
-              "clears_when": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              },
-              "recommended_command": {
-                "type": "string"
-              },
-              "run_id": {
-                "type": "string"
-              }
+          "contract_version": {
+            "type": "integer"
+          },
+          "env_vars": {
+            "additionalProperties": {
+              "type": "string"
             },
-            "required": [
-              "kind",
-              "run_id",
-              "reason",
-              "recommended_command"
-            ],
             "type": "object"
           },
-          "cases": {
-            "items": {
+          "error_codes": {
+            "additionalProperties": {
               "additionalProperties": true,
               "properties": {
-                "action": {
-                  "$ref": "#/definitions/plan_action"
-                },
-                "id": {
+                "class": {
                   "type": "string"
                 },
-                "reason": {
+                "exit": {
+                  "type": "integer"
+                },
+                "retryable": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "surface": {
                   "type": "string"
+                },
+                "where": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               },
               "required": [
-                "id",
-                "action",
-                "reason"
+                "class",
+                "where",
+                "surface"
               ],
               "type": "object"
             },
-            "type": "array"
-          },
-          "dependency_graph": {
             "type": "object"
           },
-          "execution": {
-            "type": "object"
-          },
-          "plan": {
-            "type": "object"
-          },
-          "run": {
-            "type": "object"
-          },
-          "suite": {
-            "type": "object"
-          },
-          "warnings": {
-            "items": {
+          "exit_codes": {
+            "additionalProperties": {
               "type": "object"
             },
+            "type": "object"
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
             "type": "array"
+          },
+          "global_flags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "integrations": {
+            "additionalProperties": {
+              "type": "object"
+            },
+            "type": "object"
+          },
+          "robot_docs_uri": {
+            "type": "string"
+          },
+          "schemas_uri": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          },
+          "verbs": {
+            "additionalProperties": {
+              "type": "object"
+            },
+            "type": "object"
           }
         },
         "required": [
-          "suite",
-          "run",
-          "execution",
-          "dependency_graph",
-          "plan",
-          "cases",
-          "warnings"
+          "tool_name",
+          "contract_version",
+          "features",
+          "verbs",
+          "global_flags",
+          "exit_codes",
+          "error_codes",
+          "env_vars",
+          "integrations",
+          "schemas_uri",
+          "robot_docs_uri"
         ],
         "type": "object"
       }
@@ -153,7 +169,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:9f2d8a9a5ab140c1b427cf2f528c6b63aeb3e91f00deb5757d2c3e3c2c8ffb32",
+    "data_hash": "sha256:88ef574d6fe3bf836fccfbb245a8f519ef5dce08c088db2b3fb61c9f82e2c83e",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

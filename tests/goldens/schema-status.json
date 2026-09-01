@@ -62,17 +62,86 @@
       "type": "object"
     },
     "schemas": {
-      "run": {
+      "status": {
         "additionalProperties": true,
         "properties": {
-          "existing": {
-            "type": "boolean"
+          "cases": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "$ref": "#/definitions/case_status"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "ok"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           },
-          "queue": {
+          "progress": {
+            "additionalProperties": true,
+            "properties": {
+              "case_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "terminal": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "case_count",
+              "terminal",
+              "pending"
+            ],
             "type": "object"
           },
-          "report_hash": {
-            "type": "string"
+          "queue_jobs": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "recommended_action": {
+            "additionalProperties": true,
+            "properties": {
+              "alternatives": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "rationale",
+              "alternatives"
+            ],
+            "type": "object"
+          },
+          "reservation": {
+            "type": "object"
           },
           "run": {
             "additionalProperties": true,
@@ -107,13 +176,16 @@
           },
           "run_id": {
             "type": "string"
+          },
+          "state": {
+            "$ref": "#/definitions/run_state"
           }
         },
         "required": [
           "run_id",
           "run_dir",
-          "run",
-          "report_hash"
+          "state",
+          "recommended_action"
         ],
         "type": "object"
       }
@@ -122,7 +194,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
+    "data_hash": "sha256:d98bed78937ad2132e84aa26a7f5ce63f35fa5bf99566404bbe4e71202f4f178",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

@@ -62,58 +62,26 @@
       "type": "object"
     },
     "schemas": {
-      "run": {
+      "init": {
         "additionalProperties": true,
         "properties": {
-          "existing": {
-            "type": "boolean"
-          },
-          "queue": {
-            "type": "object"
-          },
-          "report_hash": {
+          "created": {
             "type": "string"
           },
-          "run": {
-            "additionalProperties": true,
-            "properties": {
-              "case_count": {
-                "minimum": 0,
-                "type": "integer"
-              },
-              "ok": {
-                "type": "boolean"
-              },
-              "status_counts": {
-                "additionalProperties": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "propertyNames": {
-                  "$ref": "#/definitions/case_status"
-                },
-                "type": "object"
-              }
+          "files": {
+            "items": {
+              "type": "string"
             },
-            "required": [
-              "ok",
-              "case_count",
-              "status_counts"
-            ],
-            "type": "object"
+            "type": "array"
           },
-          "run_dir": {
-            "type": "string"
-          },
-          "run_id": {
+          "suite": {
             "type": "string"
           }
         },
         "required": [
-          "run_id",
-          "run_dir",
-          "run",
-          "report_hash"
+          "created",
+          "suite",
+          "files"
         ],
         "type": "object"
       }
@@ -122,7 +90,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
+    "data_hash": "sha256:ab3435916a9ea0bb8d0751dda7a4a45886fa7323c628934bf8888eb7249c0fe8",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"
