@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:21fd179d36623ec7e228d1c27122ac64b26f99dd2d189d7b075562f13c1606ae")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:3bf6f00fce2fa21728a567586d9558a00e7fdaa8aaf9bd1cd46b35533e17b9bb")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -1223,8 +1223,14 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(second["meta"]["pagination"], {"limit": 10, "cursor": "run-049", "next_cursor": None, "has_more": False})
             self.assertEqual(second["meta"]["truncated"], {"by_limit": False, "omitted": 0})
 
-            pruned_cursor = self.envelope(["jobs", "list", "--limit", "3", "--cursor", "run-020a", "--json"], cwd)
-            self.assertEqual([item["run_id"] for item in pruned_cursor["data"]["runs"]], ["run-021", "run-022", "run-023"])
+            # F4: a cursor the tool never issued (here a value that sorts between
+            # real run ids but names no run) is a user-input error, not a silent
+            # empty page. The tool only ever emits an existing run id as
+            # next_cursor, so an unissued cursor cannot masquerade as done.
+            bad_cursor = self.run_cli(["jobs", "list", "--limit", "3", "--cursor", "run-020a", "--json"], cwd, expect=1)
+            bad_payload = json.loads(bad_cursor.stdout)
+            self.assertEqual(bad_payload["errors"][0]["code"], "E_CASE_INVALID")
+            self.assertIn("run-020a", bad_payload["errors"][0]["message"])
 
             normalized = self.normalize_envelope_semantic_meta(first)
             self.assertEqual(normalized["meta"]["pagination"]["next_cursor"], "run-049")
@@ -1254,6 +1260,74 @@ class EvalctlCliTests(unittest.TestCase):
             prune_error = json.loads(prune_bad.stdout)["errors"][0]
             self.assertEqual(prune_error["code"], "E_CASE_INVALID")
             self.assertEqual(prune_error["corrected_command"], "evalctl jobs list --limit 50 --json")
+
+    def page_all_cases(self, cwd: Path, base_args: list[str]) -> list[dict]:
+        """Walk every page of a per-case collection, following meta.pagination.
+        Returns the concatenated `cases` across pages."""
+        collected: list[dict] = []
+        cursor = None
+        while True:
+            args = list(base_args) + ["--limit", "4"]
+            if cursor is not None:
+                args += ["--cursor", cursor]
+            page = self.envelope(args, cwd)
+            collected.extend(page["data"]["cases"])
+            pagination = page["meta"]["pagination"]
+            self.assertEqual(pagination["limit"], 4)
+            if not pagination["has_more"]:
+                self.assertIsNone(pagination["next_cursor"])
+                self.assertFalse(page["meta"]["truncated"]["by_limit"])
+                break
+            self.assertTrue(page["meta"]["truncated"]["by_limit"])
+            cursor = pagination["next_cursor"]
+            self.assertIsNotNone(cursor)
+        return collected
+
+    def test_per_case_collections_page_every_case_exactly_once(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            base = self.load_cases(cwd)[0]
+            expected_ids = [f"case-{i:03d}" for i in range(10)]
+            self.write_cases(cwd, [{**base, "id": cid} for cid in expected_ids])
+
+            # plan reads the suite directly (no run needed).
+            plan_cases = self.page_all_cases(cwd, ["plan", "code-review", "--json"])
+            plan_ids = [case["id"] for case in plan_cases]
+            self.assertEqual(sorted(plan_ids), expected_ids)
+            self.assertEqual(len(plan_ids), len(set(plan_ids)))
+
+            # report and status page the same collection off a finalized run.
+            self.envelope(["run", "code-review", "--run-id", "paged", "--json"], cwd)
+            report_ids = [case["id"] for case in self.page_all_cases(cwd, ["report", "paged", "--format", "json"])]
+            self.assertEqual(sorted(report_ids), expected_ids)
+            self.assertEqual(len(report_ids), len(set(report_ids)))
+            status_ids = [case["id"] for case in self.page_all_cases(cwd, ["status", "paged", "--json"])]
+            self.assertEqual(sorted(status_ids), expected_ids)
+            self.assertEqual(len(status_ids), len(set(status_ids)))
+
+            # An unbounded call on a small suite carries no pagination meta, so it
+            # stays byte-identical to pre-pagination output.
+            self.keep_first_case_only(cwd)
+            unbounded = self.envelope(["plan", "code-review", "--json"], cwd)
+            self.assertNotIn("pagination", unbounded["meta"])
+            self.assertNotIn("truncated", unbounded["meta"])
+
+    def test_per_case_collections_reject_unissued_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "paged", "--json"], cwd)
+            for args in (
+                ["plan", "code-review", "--cursor", "not-a-case", "--json"],
+                ["report", "paged", "--cursor", "not-a-case", "--format", "json"],
+                ["status", "paged", "--cursor", "not-a-case", "--json"],
+            ):
+                with self.subTest(args=args):
+                    result = self.run_cli(args, cwd, expect=1)
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload["errors"][0]["code"], "E_CASE_INVALID")
+                    self.assertIn("not-a-case", payload["errors"][0]["message"])
 
     def test_doctor_reports_initialization_and_clean_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:

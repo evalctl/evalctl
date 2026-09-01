@@ -23,6 +23,20 @@
   `jobs get`, `status`, and `report` never disagree about run existence.
   `contract_version` remains `1`; report projection and report hashes are
   unchanged.
+- **`plan`, `status`, and `report` now bound their per-case collections.** These
+  three verbs returned the full case array in one envelope -- roughly 660 bytes
+  per case for `plan` -- so a large suite could emit a quarter-megabyte payload
+  with no truncation notice and reject the bounding flag. They now accept
+  `--limit` (default `50`, max `1000`) and `--cursor`, matching `jobs list`, and
+  report `meta.pagination` and `meta.truncated` with the omitted count and a
+  paste-ready next-page command whenever the collection is clipped. An unbounded
+  call on a small suite is byte-identical to before: no pagination meta is
+  emitted unless the output is clipped or a bounding flag is passed. A cursor the
+  tool never issued -- on any of the four paginated verbs, `jobs list` included
+  -- is now `E_CASE_INVALID` (exit `1`) naming the offending value, instead of a
+  silent empty page indistinguishable from the end of the collection. For
+  `report`, only `cases` is paged; `failures` and `report_hash` stay computed
+  over the full set, so the hash remains the integrity anchor across pages.
 
 ## 0.4.4 - 2026-09-01
 

@@ -372,6 +372,7 @@
       "run_state_jobs",
       "queue_spoolctl",
       "bounded_jobs_list",
+      "bounded_case_collections",
       "doctor",
       "plan",
       "inferctl_preflight_provenance"
@@ -497,7 +498,9 @@
           "--resume",
           "--queue",
           "--slots",
-          "--inferctl-task"
+          "--inferctl-task",
+          "--limit",
+          "--cursor"
         ],
         "json": true,
         "mega_command": "PLAN",
@@ -546,7 +549,9 @@
         "flags": [
           "--json",
           "--format",
-          "--run-dir"
+          "--run-dir",
+          "--limit",
+          "--cursor"
         ],
         "json": true,
         "mutates": false
@@ -644,7 +649,9 @@
         ],
         "flags": [
           "--json",
-          "--run-dir"
+          "--run-dir",
+          "--limit",
+          "--cursor"
         ],
         "json": true,
         "mutates": false
@@ -689,7 +696,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:21fd179d36623ec7e228d1c27122ac64b26f99dd2d189d7b075562f13c1606ae",
+    "data_hash": "sha256:3bf6f00fce2fa21728a567586d9558a00e7fdaa8aaf9bd1cd46b35533e17b9bb",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

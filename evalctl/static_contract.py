@@ -19,6 +19,8 @@ DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
 DEFAULT_RESERVATION_TTL_SECONDS = 3600
 DEFAULT_JOBS_LIST_LIMIT = 50
 MAX_JOBS_LIST_LIMIT = 1000
+DEFAULT_CASE_PAGE_LIMIT = 50
+MAX_CASE_PAGE_LIMIT = 1000
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 BUILTIN_SCORERS = ("contains", "regex", "exact", "json-schema", "numeric-threshold", "file-exists", "exit-code", "workspace-diff")
 
@@ -166,6 +168,8 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
             "--queue": FlagSpec("enum", choices=frozenset({"spoolctl"})),
             "--slots": positive_int_spec(),
             "--inferctl-task": FlagSpec("safe_id"),
+            "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT),
+            "--cursor": FlagSpec("text"),
         },
         mega_command="PLAN",
     ),
@@ -194,8 +198,8 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
     "suite": CommandSpec("suite", "Author suites, including suite add.", args=("add", "name"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--runner-argv": FlagSpec("text"), "--runner-command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL}, mutates=True, exit_codes=(0, 1, 5)),
     "case": CommandSpec("case", "Author cases, including case add.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
     "scorer": CommandSpec("scorer", "Author scorers, including built-in and command scorers.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--name": FlagSpec("enum", choices=frozenset(set(BUILTIN_SCORERS) | {"command"})), "--required": BOOL, "--advisory": BOOL, "--id": FlagSpec("safe_id"), "--argv": FlagSpec("text"), "--command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL, "--timeout": positive_int_spec()}, mutates=True, exit_codes=(0, 1, 5)),
-    "status": CommandSpec("status", "Diagnose run state.", args=("run-id",), flags={"--json": BOOL, "--run-dir": FlagSpec("run_path")}),
-    "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path")}, exit_codes=(0, 1, 3, 4)),
+    "status": CommandSpec("status", "Diagnose run state.", args=("run-id",), flags={"--json": BOOL, "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}),
+    "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}, exit_codes=(0, 1, 3, 4)),
 }
 
 VERB_NAMES = frozenset(COMMAND_SPECS)
@@ -395,7 +399,7 @@ def capabilities_data(*, probe_spoolctl_func: Callable[..., dict[str, Any]] | No
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
-        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "doctor", "plan", "inferctl_preflight_provenance"],
+        "features": ["universal_envelope", "deterministic_output", "artifact_replay", "workspace_diff", "authoring", "execution_replay", "command_scorer", "durable_runs", "resumable", "run_state_jobs", "queue_spoolctl", "bounded_jobs_list", "bounded_case_collections", "doctor", "plan", "inferctl_preflight_provenance"],
         "verbs": verbs,
         "global_flags": {"--json": "structured envelope; accepted only where the verb's json field is true",
                          "--help": "per-verb help, exit 0, no side effects", "--version": "version", "--no-color": "suppress ANSI"},

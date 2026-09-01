@@ -10,10 +10,12 @@
       "hint": "check the command's supported flags",
       "message": "unknown flag '--jsoon'",
       "valid_values": [
+        "--cursor",
         "--help",
         "--inferctl-task",
         "--jobs",
         "--json",
+        "--limit",
         "--no-color",
         "--queue",
         "--resume",

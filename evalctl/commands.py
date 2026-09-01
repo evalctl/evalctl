@@ -8,7 +8,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import __version__
 
@@ -17,6 +17,7 @@ from .static_contract import (
     ACK_UNSANDBOXED_FLAG,
     BOOL,
     COMMAND_SPECS,
+    DEFAULT_CASE_PAGE_LIMIT,
     DEFAULT_JOBS_LIST_LIMIT,
     DEFAULT_RESERVATION_TTL_SECONDS,
     DOCTOR_COMPONENTS,
@@ -377,6 +378,41 @@ def print_envelope(data: Any, *, json_mode: bool, human: str | None = None, warn
     else:
         print(human if human is not None else json.dumps(data, indent=2, sort_keys=True))
     return 0
+
+
+def paginate_cases(cases: list[dict[str, Any]], parsed: ParsedArgs,
+                   next_command_fn: Callable[[int, str], str]) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[dict[str, Any]]]:
+    """Bound a per-case collection the way `jobs list` bounds runs: a documented
+    default limit, an explicit `--limit`, and a cursor for the next page. A cursor
+    the tool never issued (not the id of any case) is a user-input error, so a
+    garbage cursor cannot masquerade as an empty final page.
+
+    Returns (page, meta_extra, commands). When the collection is not clipped and
+    the caller passed neither `--limit` nor `--cursor`, returns the full list with
+    no pagination meta, so an unbounded call on a small suite is byte-identical to
+    before pagination existed.
+    """
+    limit = int(parsed_value(parsed, "--limit", DEFAULT_CASE_PAGE_LIMIT))
+    cursor = parsed_value(parsed, "--cursor")
+    explicit = cursor is not None or parsed_value(parsed, "--limit") is not None
+    ids = [case["id"] for case in cases]
+    if cursor is not None and cursor not in ids:
+        raise EvalctlError("E_CASE_INVALID", f"unknown pagination cursor: {cursor}", "omit --cursor to start from the first page, or pass meta.pagination.next_cursor from a prior page", 1)
+    start = ids.index(cursor) + 1 if cursor is not None else 0
+    page = cases[start:start + limit]
+    next_index = start + len(page)
+    has_more = next_index < len(cases)
+    next_cursor = page[-1]["id"] if has_more and page else None
+    if not has_more and not explicit:
+        return cases, None, []
+    meta_extra = {
+        "pagination": {"limit": limit, "cursor": cursor, "next_cursor": next_cursor, "has_more": has_more},
+        "truncated": {"by_limit": has_more, "omitted": len(cases) - next_index},
+    }
+    commands: list[dict[str, Any]] = []
+    if has_more and next_cursor is not None:
+        commands.append({"command": next_command_fn(limit, next_cursor), "rationale": "Fetch the next page of cases."})
+    return page, meta_extra, commands
 
 
 def capabilities_data() -> dict[str, Any]:
@@ -768,6 +804,18 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
     will_skip = len([item for item in case_items if item["action"] == "skip_terminal"])
     blocked = len([item for item in case_items if item["action"] == "blocked"])
     tracks = build_tracks(case_items, slots or jobs)
+
+    def plan_next_command(lim: int, cur: str) -> str:
+        if resume_id is not None:
+            return f"evalctl plan --resume {shlex.quote(resume_id)} --limit {lim} --cursor {shlex.quote(cur)} --json"
+        parts = ["evalctl", "plan", suite_name]
+        if run_id:
+            parts.extend(["--run-id", run_id])
+        parts.extend(["--limit", str(lim), "--cursor", cur, "--json"])
+        return " ".join(shlex.quote(part) for part in parts)
+
+    case_page, page_meta, page_commands = paginate_cases(case_items, parsed, plan_next_command)
+    commands.extend(page_commands)
     data = {
         "suite": {"name": suite_name, "suite_dir": str(suite_dir), "case_count": len(cases)},
         "run": {
@@ -779,12 +827,12 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
         "execution": {"mode": execution_mode, "jobs": jobs, "slots": slots, "timeout_seconds": timeout_seconds},
         "dependency_graph": {"kind": "independent_cases", "edges": []},
         "plan": {"summary": {"total_items": len(case_items), "will_run": will_run, "will_skip": will_skip, "blocked": blocked, "parallel_tracks": len(tracks)}, "tracks": tracks},
-        "cases": case_items,
+        "cases": case_page,
         "warnings": warnings,
     }
     if blocked_by_external is not None:
         data["blocked_by_external"] = blocked_by_external
-    return print_envelope(data, json_mode=json_mode, human=f"plan {suite_name}: {will_run} run, {will_skip} skip, {blocked} blocked", warnings=warnings, commands=commands, started=started)
+    return print_envelope(data, json_mode=json_mode, human=f"plan {suite_name}: {will_run} run, {will_skip} skip, {blocked} blocked", warnings=warnings, commands=commands, started=started, meta_extra=page_meta)
 
 
 FAIL_ON_FAIL_STDERR = "eval failure: one or more cases did not pass (--fail-on-fail)"
@@ -946,6 +994,8 @@ def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
     if subcommand == "list":
         limit = int(parsed_value(parsed, "--limit", DEFAULT_JOBS_LIST_LIMIT))
         cursor = parsed_value(parsed, "--cursor")
+        if cursor is not None and cursor not in {path.name for path in run_dirs}:
+            raise EvalctlError("E_CASE_INVALID", f"unknown pagination cursor: {cursor}", "omit --cursor to start from the first page, or pass meta.pagination.next_cursor from a prior page", 1)
         if cursor is None:
             page_dirs = run_dirs
         else:
@@ -1098,8 +1148,11 @@ def command_status(argv: list[str], json_mode: bool, started: float) -> int:
     classification = classify_run_dir(run_dir)
     if (run_dir / "manifest.json").exists():
         report = report_data(run_dir)
-        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "run": report["run"], "cases": report["cases"], "progress": classification["cases"], "recommended_action": {"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "inspect deterministic report and ranked failures", "alternatives": []}}
+        run_ref = classification["run_id"]
+        case_page, page_meta, page_commands = paginate_cases(report["cases"], parsed, lambda lim, cur: f"evalctl status {shlex.quote(run_ref)} --limit {lim} --cursor {shlex.quote(cur)} --json")
+        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "run": report["run"], "cases": case_page, "progress": classification["cases"], "recommended_action": {"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "inspect deterministic report and ranked failures", "alternatives": []}}
         human = f"{classification['run_id']}: {'pass' if report['run']['ok'] else 'fail'}"
+        return print_envelope(data, json_mode=json_mode, human=human, commands=page_commands, started=started, meta_extra=page_meta)
     else:
         # In flight (or stale/orphaned): manifest.json is written only at
         # finalize, so report deterministic scoring is not yet available.
@@ -1130,8 +1183,12 @@ def command_report(argv: list[str], json_mode: bool, started: float) -> int:
         return 0
     if fmt not in {"json", "markdown"}:
         raise EvalctlError("E_CASE_INVALID", f"--format must be markdown or json (got {fmt})", "try: evalctl report <run-id> --format json", 1)
-    commands = [{"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "regenerate this report"}]
-    return print_envelope(data, json_mode=True, commands=commands, started=started)
+    # Paginate only the `cases` array; `failures` and `report_hash` stay over the
+    # full set so the hash remains the integrity anchor across pages.
+    case_page, page_meta, page_commands = paginate_cases(data["cases"], parsed, lambda lim, cur: f"evalctl report {shlex.quote(run_dir.name)} --limit {lim} --cursor {shlex.quote(cur)} --format json")
+    data = {**data, "cases": case_page}
+    commands = [{"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "regenerate this report"}, *page_commands]
+    return print_envelope(data, json_mode=True, commands=commands, started=started, meta_extra=page_meta)
 
 
 def report_format_json_requested(argv: list[str]) -> bool:
