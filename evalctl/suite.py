@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import shutil
@@ -8,7 +9,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .artifacts import _atomic_write, load_cases, read_json, write_json
-from .static_contract import EvalctlError, SAFE_ID_RE, sha256_text, stable_json
+from .static_contract import BUILTIN_SCORERS, EvalctlError, SAFE_ID_RE, sha256_text, stable_json
+
+VALID_SCORER_NAMES = frozenset(set(BUILTIN_SCORERS) | {"command"})
 
 
 def resolve_suite(suite: str | None) -> Path:
@@ -32,6 +35,14 @@ def validate_suite(suite_dir: Path) -> dict[str, Any]:
         raise EvalctlError("E_SCHEMA_VIOLATION", "runner must define argv for shell:false or command for shell:true", f"fix {suite_dir/'suite.json'} runner", 1)
     if has_argv and has_cmd:
         raise EvalctlError("E_SCHEMA_VIOLATION", "runner must not define both argv and command", f"fix {suite_dir/'suite.json'} runner", 1)
+    for scorer in suite.get("scorers", []):
+        name = scorer.get("name") if isinstance(scorer, dict) else None
+        if name not in VALID_SCORER_NAMES:
+            ctx: dict[str, Any] = {"valid_values": sorted(VALID_SCORER_NAMES)}
+            suggestion = difflib.get_close_matches(str(name), sorted(VALID_SCORER_NAMES), n=1, cutoff=0.6)
+            if suggestion:
+                ctx["did_you_mean"] = suggestion[0]
+            raise EvalctlError("E_CASE_INVALID", f"unknown scorer name: {name}", "use a built-in scorer name or 'command'", 1, **ctx)
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
     for case in cases:
         for key in ("task", "workspace"):
@@ -43,6 +54,33 @@ def validate_suite(suite_dir: Path) -> dict[str, Any]:
         if case.get("diff") and not (suite_dir / case["diff"]).exists():
             raise EvalctlError("E_CASE_INVALID", f"case {case['id']} diff missing: {case['diff']}", "fix diff path", 1)
     return {"suite": suite.get("name", suite_dir.name), "case_count": len(cases), "valid": True}
+
+
+def runner_executable_warnings(suite_dir: Path) -> list[dict[str, Any]]:
+    """Advisory check: can the runner argv's executable be resolved now? An
+    executable that does not resolve at validate time may still resolve in the
+    run environment, so this is a warning, not a failure. Argv tokens that carry
+    an env placeholder ($VAR) resolve only at run time and are left alone."""
+    suite = read_json(suite_dir / "suite.json")
+    runner = suite.get("runner") or {}
+    argv = runner.get("argv")
+    if not (isinstance(argv, list) and argv and isinstance(argv[0], str)):
+        return []
+    exe = argv[0]
+    if "$" in exe:
+        return []
+    if "/" in exe:
+        candidate = Path(exe) if os.path.isabs(exe) else suite_dir / exe
+        resolved = candidate.exists() or shutil.which(exe) is not None
+    else:
+        resolved = shutil.which(exe) is not None
+    if resolved:
+        return []
+    return [{
+        "code": "W_RUNNER_UNRESOLVED",
+        "message": f"runner executable does not resolve at validate time: {exe}",
+        "detail": "it may still resolve in the run environment; validate does not fail on this",
+    }]
 
 
 def init_project(force: bool = False) -> dict[str, Any]:

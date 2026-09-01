@@ -38,6 +38,21 @@
   `report`, only `cases` is paged; `failures` and `report_hash` stay computed
   over the full set, so the hash remains the integrity anchor across pages.
 
+- **`validate` now checks the two things it claimed to check but did not.** A
+  suite whose scorer name was not a known scorer, or whose runner executable did
+  not resolve, still returned `valid: true` -- so an agent following the
+  prescribed validate-then-run workflow got a green validate and an errored run.
+  An unknown scorer name is now `E_CASE_INVALID` (exit `1`) naming the valid set
+  (`valid_values`) with a near-match `did_you_mean`. An unresolvable runner
+  executable is the new `W_RUNNER_UNRESOLVED` warning rather than an error,
+  because it may still resolve in the run environment; an argv token carrying an
+  env placeholder (`$VAR`) resolves only at run time and is left alone.
+- **`suite add --runner-argv` rejects a JSON array.** The flag takes a
+  shell-style argv string, but a JSON array (`'["python3","runner.py"]'`) was
+  silently coerced into a single literal argv token that validated and then
+  errored at run time. It is now `E_CASE_INVALID` (exit `1`) naming the shape
+  the flag wants.
+
 ## 0.4.4 - 2026-09-01
 
 Two exit codes that the contract advertised but that no code path exercised are

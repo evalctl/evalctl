@@ -58,6 +58,7 @@ CODE_REGISTRY = {
     "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init", "replay", "suite", "case", "scorer"], "retryable": False, "surface": "envelope"},
     "E_UNSANDBOXED_RUNNER_UNACK": {"class": "safety", "exit": 2, "where": ["run", "replay"], "retryable": False, "surface": "envelope"},
     "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run", "replay"], "surface": "envelope"},
+    "W_RUNNER_UNRESOLVED": {"class": "warning", "where": ["validate"], "surface": "envelope"},
     "W_REPLAY_CASE_ABSENT": {"class": "warning", "where": ["replay"], "surface": "envelope"},
     "W_NOTHING_TO_REPLAY": {"class": "warning", "where": ["replay"], "surface": "envelope"},
     "W_TEXT_DIFF_APPROXIMATED": {"class": "warning", "where": ["run"], "surface": "envelope"},

@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:3bf6f00fce2fa21728a567586d9558a00e7fdaa8aaf9bd1cd46b35533e17b9bb")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:7ca5b5f1b6fb62ef69c03928f47018f7b42073d9522613f963d5f3bc518f8244")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -2421,6 +2421,13 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(json.loads(no_shell.stdout)["errors"][0]["code"], "E_CASE_INVALID")
             both_forms = self.run_cli(["suite", "add", "demo", "--runner-argv", "python3 x.py", "--runner-command", "python3 x.py", "--shell", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(both_forms.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            # F15: --runner-argv takes a shell-style string; a JSON array was
+            # silently coerced into one literal argv token. Reject it by shape.
+            json_array = self.run_cli(["suite", "add", "demo", "--runner-argv", '["python3","x.py"]', "--json"], cwd, expect=1)
+            json_array_error = json.loads(json_array.stdout)["errors"][0]
+            self.assertEqual(json_array_error["code"], "E_CASE_INVALID")
+            self.assertIn("JSON array", json_array_error["message"])
+            self.assertFalse((cwd / "evals" / "suites" / "demo").exists())
 
     def test_suite_add_temp_dir_is_removed_on_validation_failure(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2438,6 +2445,45 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertEqual([p.name for p in suites_root.iterdir()], [])
             finally:
                 os.chdir(old_cwd)
+
+    def test_validate_resolves_scorer_names_and_runner_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            suite_json = cwd / "evals" / "suites" / "code-review" / "suite.json"
+
+            # Baseline: the sample suite is valid with no warnings (argv[0] is
+            # python3, which resolves on PATH).
+            clean = self.envelope(["validate", "code-review", "--json"], cwd)
+            self.assertTrue(clean["data"]["valid"])
+            self.assertEqual(clean["warnings"], [])
+
+            # F16: an unknown scorer name is an error naming the valid set with a
+            # near-match suggestion, not a silent valid:true.
+            suite = json.loads(suite_json.read_text())
+            suite["scorers"].append({"name": "containz", "required": True})
+            suite_json.write_text(json.dumps(suite, indent=2, sort_keys=True) + "\n")
+            bad_scorer = self.run_cli(["validate", "code-review", "--json"], cwd, expect=1)
+            scorer_error = json.loads(bad_scorer.stdout)["errors"][0]
+            self.assertEqual(scorer_error["code"], "E_CASE_INVALID")
+            self.assertIn("contains", scorer_error["valid_values"])
+            self.assertEqual(scorer_error["did_you_mean"], "contains")
+
+            # F16: an unresolvable runner executable is a warning (it may resolve
+            # in the run environment), not a failure. An env-placeholder argv[0]
+            # is left alone because it only resolves at run time.
+            suite["scorers"] = [{"name": "contains", "required": True}]
+            suite["runner"]["argv"] = ["nonesuch-binary-xyz", "runner.py"]
+            suite_json.write_text(json.dumps(suite, indent=2, sort_keys=True) + "\n")
+            warned = self.envelope(["validate", "code-review", "--json"], cwd)
+            self.assertTrue(warned["data"]["valid"])
+            self.assertEqual(warned["warnings"][0]["code"], "W_RUNNER_UNRESOLVED")
+            self.assertIn("nonesuch-binary-xyz", warned["warnings"][0]["message"])
+
+            suite["runner"]["argv"] = ["$EVALCTL_WORKSPACE/runner.py"]
+            suite_json.write_text(json.dumps(suite, indent=2, sort_keys=True) + "\n")
+            placeholder = self.envelope(["validate", "code-review", "--json"], cwd)
+            self.assertEqual(placeholder["warnings"], [])
 
     def test_case_add_appends_valid_case_and_is_idempotent_without_id(self) -> None:
         with tempfile.TemporaryDirectory() as td:

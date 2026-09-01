@@ -81,6 +81,7 @@ Warnings never fail a command; they annotate the envelope.
 | Code | Where |
 | --- | --- |
 | `W_UNSANDBOXED_RUNNER` | present on every `run`/`replay` envelope |
+| `W_RUNNER_UNRESOLVED` | `validate` could not resolve the runner executable now |
 | `W_PARTIAL_RUN` | some cases did not complete cleanly |
 | `W_REPLAY_CASE_ABSENT` | a selected case is missing from the current suite |
 | `W_NOTHING_TO_REPLAY` | no failed/errored cases to replay |

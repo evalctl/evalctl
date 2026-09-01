@@ -78,6 +78,7 @@ from .suite import (
     init_project,
     is_safe_id,
     resolve_suite,
+    runner_executable_warnings,
     scorer_add_data,
     suite_add_data,
     validate_suite,
@@ -511,8 +512,10 @@ def command_validate(argv: list[str], json_mode: bool, started: float) -> int:
     if len(parsed.positionals) > 2:
         raise EvalctlError("E_CASE_INVALID", "validate accepts at most one suite positional", "try: evalctl validate code-review --json", 1)
     suite_arg = parsed.positionals[1] if len(parsed.positionals) > 1 else "code-review"
-    data = validate_suite(resolve_suite(suite_arg))
-    return print_envelope(data, json_mode=json_mode, human=f"{data['suite']}: {data['case_count']} cases valid", started=started)
+    suite_dir = resolve_suite(suite_arg)
+    data = validate_suite(suite_dir)
+    warnings = runner_executable_warnings(suite_dir)
+    return print_envelope(data, json_mode=json_mode, human=f"{data['suite']}: {data['case_count']} cases valid", warnings=warnings, started=started)
 
 
 def runner_from_authoring_flags(argv: list[str], *, prefix: str = "--runner", parsed: ParsedArgs | None = None) -> dict[str, Any]:
@@ -526,6 +529,13 @@ def runner_from_authoring_flags(argv: list[str], *, prefix: str = "--runner", pa
         raise EvalctlError("E_CASE_INVALID", "--shell requires --runner-command, not --runner-argv", "drop --shell or use --runner-command", 1)
     if command_value and not shell:
         raise EvalctlError("E_CASE_INVALID", "--runner-command requires --shell", "use --runner-argv for shell:false runners", 1)
+    if argv_value and argv_value.lstrip().startswith("["):
+        try:
+            decoded = json.loads(argv_value)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, list):
+            raise EvalctlError("E_CASE_INVALID", f"{prefix}-argv takes a shell-style argv string, not a JSON array", f'pass argv as a shell string, e.g. {prefix}-argv "python3 $EVALCTL_WORKSPACE/r.py"', 1)
     runner = {
         "argv": shlex.split(argv_value) if argv_value else None,
         "shell": shell,

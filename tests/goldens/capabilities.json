@@ -313,6 +313,13 @@
           "resume"
         ]
       },
+      "W_RUNNER_UNRESOLVED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "validate"
+        ]
+      },
       "W_TEXT_DIFF_APPROXIMATED": {
         "class": "warning",
         "surface": "envelope",
@@ -696,7 +703,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:3bf6f00fce2fa21728a567586d9558a00e7fdaa8aaf9bd1cd46b35533e17b9bb",
+    "data_hash": "sha256:7ca5b5f1b6fb62ef69c03928f47018f7b42073d9522613f963d5f3bc518f8244",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"
