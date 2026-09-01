@@ -528,7 +528,7 @@
         "args": [
           "run-id"
         ],
-        "description": "Re-execute failed/errored cases from a source run into a linked partial run.",
+        "description": "Re-execute failed/errored cases from a source run into a linked partial run. Without --run-id the destination id is derived from the source run and the replayed case set, not the clock, so a retry is idempotent: it returns the existing run rather than spawning a second one or colliding.",
         "exit_codes": [
           0,
           1,
@@ -714,7 +714,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:10f6799303a2a76de42b6dbb00e166b01a78580ad2fe30c9f9072e69f64b5b36",
+    "data_hash": "sha256:3f8c84e559c77bc1f669b6bfb3a3cdf6e03fe1243c0883dc46a895d7d491d7a4",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

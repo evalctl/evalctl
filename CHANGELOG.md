@@ -79,6 +79,18 @@
   `state` inside `queue_jobs` is deliberately left open: it is a spoolctl
   vocabulary evalctl passes through and does not own. `contract_version` remains
   `1`; report projection and report hashes are unchanged.
+- **`replay` is now idempotent independently of the wall clock.** The default
+  destination id embedded a second-resolution timestamp, so a retry behaved
+  differently depending on which second it landed in: two `replay` calls in the
+  same second collided on one id and the second returned `E_RUN_CONFLICT`, while
+  two calls across a second boundary produced two separate runs. The default id
+  is now derived from the source run and the exact replayed case set, not the
+  clock, so a retry always lands on the same id and returns the existing run --
+  matching how `run --run-id` treats a completed run. Idempotency keys on run
+  identity, not the id string: a genuinely different case set on the same id is
+  still `E_RUN_CONFLICT` unless `--force` is passed, and `--force` always
+  rebuilds. `SOURCE_DATE_EPOCH` is still honored for run timestamps; it no longer
+  affects the replay id at all. Report hashes are unchanged.
 
 ## 0.4.4 - 2026-09-01
 

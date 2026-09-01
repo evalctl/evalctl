@@ -38,6 +38,7 @@ from .static_contract import (
     help_text,
     robot_docs,
     schema_data,
+    sha256_text,
     stable_json,
     verb_help_text,
 )
@@ -1127,15 +1128,36 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
 
     jobs = int(parsed_value(parsed, "--jobs", min(os.cpu_count() or 1, 4)))
     timeout_override = parsed_value(parsed, "--timeout")
-    run_id = parsed_value(parsed, "--run-id", f"{source_manifest['run_id']}-replay-{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H%M%SZ')}")
+    # The default replay id is derived from the source run and the exact set of
+    # cases being replayed, not from the wall clock. Two replays of the same
+    # source and case set land on the same id whether or not a second boundary
+    # fell between them, so a retry is idempotent instead of either colliding
+    # (same second) or spawning a second run (across a boundary).
+    explicit_run_id = parsed_value(parsed, "--run-id")
+    if explicit_run_id is not None:
+        run_id = explicit_run_id
+    else:
+        replay_key = sha256_text(stable_json(run_identity(suite, suite_dir, target_cases)))[:12]
+        run_id = f"{source_manifest['run_id']}-replay-{replay_key}"
     run_dir = Path("evals") / "runs" / run_id
     if run_dir.resolve() == source_run.resolve():
         raise EvalctlError("E_RUN_CONFLICT", "replay destination must not be the source run", "use a fresh --run-id", 5)
     if run_dir.exists():
         if (run_dir / "manifest.json").exists():
-            if not parsed_bool(parsed, "--force"):
-                raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed; refusing to overwrite without --force", "use a fresh --run-id or pass --force", 5)
-            shutil.rmtree(run_dir)
+            manifest_doc = read_json(run_dir / "manifest.json")
+            identity_matches = run_identity(suite, suite_dir, target_cases) == manifest_identity(manifest_doc)
+            if parsed_bool(parsed, "--force"):
+                # An explicit override always rebuilds, whatever is there.
+                shutil.rmtree(run_dir)
+            elif identity_matches:
+                # Same replay already completed: return it, matching how
+                # `run --run-id` treats a completed run as existing.
+                existing_report = report_data(run_dir)
+                run_summary = {"ok": existing_report["run"]["ok"], "case_count": existing_report["run"]["case_count"], "status_counts": existing_report["run"]["status_counts"]}
+                existing = {"replayed_from": manifest_doc.get("replayed_from") or source_manifest["run_id"], "cases_replayed": len(manifest_doc["cases"]), "run_id": run_id, "run_dir": str(run_dir), "existing": True, "run": run_summary, "report_hash": existing_report["report_hash"]}
+                return print_envelope(existing, json_mode=json_mode, human=f"{run_id}: already replayed", warnings=warnings, started=started)
+            else:
+                raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed for a different case set; refusing to overwrite without --force", "use a fresh --run-id or pass --force", 5)
         else:
             raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl replay with a new --run-id", 4)
     data, run_warnings, run_ok = execute_cases(suite_dir, suite, target_cases, run_dir, run_id, jobs, timeout_override, source_manifest["run_id"])

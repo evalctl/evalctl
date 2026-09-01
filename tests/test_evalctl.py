@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:10f6799303a2a76de42b6dbb00e166b01a78580ad2fe30c9f9072e69f64b5b36")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:3f8c84e559c77bc1f669b6bfb3a3cdf6e03fe1243c0883dc46a895d7d491d7a4")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -2480,15 +2480,59 @@ class EvalctlCliTests(unittest.TestCase):
             self.envelope(["run", "code-review", "--run-id", "source", "--json"], cwd)
             self.fix_cr_fail_runner(cwd)
             self.envelope(["replay", "--failed", "source", "--run-id", "dest", "--json"], cwd)
-            conflict = self.run_cli(["replay", "--failed", "source", "--run-id", "dest", "--json"], cwd, expect=5)
-            self.assertEqual(json.loads(conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
+            # A retry with the same source and case set is idempotent -- it returns
+            # the existing run rather than refusing, matching `run --run-id`.
+            repeat = self.envelope(["replay", "--failed", "source", "--run-id", "dest", "--json"], cwd)
+            self.assertTrue(repeat["data"]["existing"])
+            self.assertEqual(repeat["data"]["run_id"], "dest")
             forced = self.envelope(["replay", "--failed", "source", "--run-id", "dest", "--force", "--json"], cwd)
             self.assertEqual(forced["data"]["run_id"], "dest")
+            self.assertNotIn("existing", forced["data"])
 
             source_manifest = (cwd / "evals" / "runs" / "source" / "manifest.json").read_text()
             same = self.run_cli(["replay", "--failed", "source", "--run-id", "source", "--force", "--json"], cwd, expect=5)
             self.assertEqual(json.loads(same.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
             self.assertEqual((cwd / "evals" / "runs" / "source" / "manifest.json").read_text(), source_manifest)
+
+    def test_replay_default_run_id_is_clock_independent_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "source", "--json"], cwd)
+            self.fix_cr_fail_runner(cwd)
+
+            # Three replays of the same source with no --run-id. The clock is
+            # forced to differ: same second (A, B share an epoch), then a second
+            # far away (C). If the default id were clock-derived, C would land on
+            # a different id and spawn a second run. It must not.
+            same_second = {"SOURCE_DATE_EPOCH": "1700000000"}
+            later_second = {"SOURCE_DATE_EPOCH": "1900000000"}
+            first = self.envelope(["replay", "--failed", "source", "--json"], cwd, extra_env=same_second)
+            second = self.envelope(["replay", "--failed", "source", "--json"], cwd, extra_env=same_second)
+            third = self.envelope(["replay", "--failed", "source", "--json"], cwd, extra_env=later_second)
+
+            self.assertIn("-replay-", first["data"]["run_id"])
+            self.assertEqual(first["data"]["run_id"], second["data"]["run_id"])
+            self.assertEqual(first["data"]["run_id"], third["data"]["run_id"])
+            self.assertNotIn("existing", first["data"])
+            self.assertTrue(second["data"]["existing"])
+            self.assertTrue(third["data"]["existing"])
+            self.assertEqual(first["data"]["cases_replayed"], 1)
+            self.assertEqual(second["data"]["cases_replayed"], 1)
+            self.assertEqual({first["data"]["report_hash"], second["data"]["report_hash"], third["data"]["report_hash"]}, {first["data"]["report_hash"]})
+
+            replay_dirs = [p.name for p in (cwd / "evals" / "runs").iterdir() if "-replay-" in p.name]
+            self.assertEqual(len(replay_dirs), 1, f"a retry spawned a second run: {sorted(replay_dirs)}")
+
+            # Idempotency keys on identity, not just the id string: a genuinely
+            # different suite/case set on the same explicit id is still a conflict,
+            # so a retry never silently overwrites a different run.
+            self.envelope(["replay", "--failed", "source", "--run-id", "explicit-dest", "--json"], cwd)
+            suite = self.load_suite(cwd)
+            suite["name"] = "code-review-renamed"
+            self.write_suite(cwd, suite)
+            conflict = self.run_cli(["replay", "--failed", "source", "--suite", "code-review", "--run-id", "explicit-dest", "--json"], cwd, expect=5)
+            self.assertEqual(json.loads(conflict.stdout)["errors"][0]["code"], "E_RUN_CONFLICT")
 
     def test_replay_suite_override_and_absent_case_warning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
