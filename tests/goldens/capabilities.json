@@ -101,6 +101,15 @@
           "resume"
         ]
       },
+      "E_RUN_IN_FLIGHT": {
+        "class": "transient",
+        "exit": 4,
+        "retryable": true,
+        "surface": "envelope",
+        "where": [
+          "report"
+        ]
+      },
       "E_RUN_NOT_FOUND": {
         "class": "user-input",
         "exit": 1,
@@ -531,7 +540,8 @@
         "exit_codes": [
           0,
           1,
-          3
+          3,
+          4
         ],
         "flags": [
           "--json",
@@ -679,7 +689,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:85f29a991dac091beb1aa1b7af80832ff3531c28203281aa9e7976424cabeef3",
+    "data_hash": "sha256:21fd179d36623ec7e228d1c27122ac64b26f99dd2d189d7b075562f13c1606ae",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

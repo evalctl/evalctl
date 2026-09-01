@@ -71,6 +71,7 @@ prints a one-line `eval failure:` summary to stderr.
 | `E_SCORER_CASE_FAILED` | tool-env | — | score_json |
 | `E_JOB_TRANSIENT` | transient | 4 | envelope |
 | `E_RUN_BUSY` | transient | 4 | envelope |
+| `E_RUN_IN_FLIGHT` | transient | 4 | envelope |
 | `E_RUN_CONFLICT` | conflict | 5 | envelope |
 
 ## Warnings
@@ -107,6 +108,12 @@ request degrades to `W_INFERCTL_ABSENT` rather than capturing route provenance.
   the invoker; a suite-file field cannot satisfy it.
 - **`E_RUN_BUSY`** — a live reservation holds the run. Wait, or take it over with
   an explicit `run --resume`. Retryable.
+- **`E_RUN_IN_FLIGHT`** — `report` was asked for a run that exists but has not
+  finalized, so there is no deterministic report yet. Retryable once the run
+  finishes; use `status <run-id>` to watch live progress in the meantime. `status`
+  itself never returns this — it reports the live state directly. `E_RUN_NOT_FOUND`
+  is reserved for run ids with no run directory at all, so `jobs get`, `status`,
+  and `report` never disagree about whether a run exists.
 - **`E_RUN_CONFLICT`** — you reused a key/run-id with different content, or an
   authoring add clashed. Not retryable; change the identity or content.
 - **`E_SPOOLCTL_UNAVAILABLE` / `E_SPOOLCTL_INCOMPATIBLE`** — only ever raised when

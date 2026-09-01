@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:85f29a991dac091beb1aa1b7af80832ff3531c28203281aa9e7976424cabeef3")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:21fd179d36623ec7e228d1c27122ac64b26f99dd2d189d7b075562f13c1606ae")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -994,6 +994,70 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertEqual(marker["id"], case["id"])
                 self.assertEqual(marker["status"], case["status"])
                 self.assertIn(marker["status"], {"pass", "fail", "error"})
+
+    def test_status_and_report_agree_with_jobs_get_on_an_in_flight_run(self) -> None:
+        # While a run executes, `jobs get`, `status`, and `report` must not
+        # disagree about whether the run exists. Before this fix status/report
+        # keyed on manifest.json (written only at finalize) and returned
+        # E_RUN_NOT_FOUND for a run `jobs get` reported as running.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.write_resume_runner(cwd)
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env.update({"RUN_LOG": str(cwd / "runner.log"), "SLEEP_CASE": "cr-pass"})
+            proc = subprocess.Popen(
+                CMD + ["run", "code-review", "--run-id", "midflight", "--jobs", "1", "--reservation-ttl", "1", "--json"],
+                cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            run_dir = cwd / "evals" / "runs" / "midflight"
+            first_marker = run_dir / "cases" / "cr-fail" / "state.json"
+            try:
+                deadline = time.time() + 10
+                while time.time() < deadline and not first_marker.exists():
+                    time.sleep(0.05)
+                # Mid-flight: one case is terminal, cr-pass is still sleeping, so
+                # run.json exists but manifest.json (finalize-only) does not.
+                self.assertTrue(first_marker.exists(), "first case never reached terminal marker")
+                self.assertTrue((run_dir / "run.json").exists())
+                self.assertFalse((run_dir / "manifest.json").exists())
+
+                # (c) All three verbs agree the run exists.
+                jobs_get = self.envelope(["jobs", "get", "midflight", "--json"], cwd)
+                self.assertEqual(jobs_get["data"]["state"], "running")
+
+                # (a) status returns exit 0 with live state and per-case progress.
+                status = self.envelope(["status", "midflight", "--json"], cwd)
+                self.assertEqual(status["data"]["run_id"], "midflight")
+                self.assertEqual(status["data"]["state"], "running")
+                self.assertEqual(status["data"]["progress"]["case_count"], 2)
+                self.assertEqual(status["data"]["progress"]["terminal"], 1)
+                self.assertEqual(status["data"]["progress"]["pending"], 1)
+
+                # (b) report names the in-flight state; it must not be
+                # E_RUN_NOT_FOUND, and it points the caller at status.
+                report = self.envelope(["report", "midflight", "--format", "json"], cwd, expect=4)
+                codes = {e["code"] for e in report["errors"]}
+                self.assertIn("E_RUN_IN_FLIGHT", codes)
+                self.assertNotIn("E_RUN_NOT_FOUND", codes)
+                self.assertIn("evalctl status midflight", report["errors"][0]["hint"])
+            finally:
+                proc.terminate()
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate(timeout=5)
+
+            # (e) E_RUN_NOT_FOUND is reserved for ids with no run directory at
+            # all; all three verbs agree there too.
+            absent = self.envelope(["jobs", "get", "no-such", "--json"], cwd, expect=1)
+            self.assertEqual({e["code"] for e in absent["errors"]}, {"E_RUN_NOT_FOUND"})
+            status_absent = self.envelope(["status", "no-such", "--json"], cwd, expect=1)
+            self.assertEqual({e["code"] for e in status_absent["errors"]}, {"E_RUN_NOT_FOUND"})
+            report_absent = self.envelope(["report", "no-such", "--format", "json"], cwd, expect=1)
+            self.assertEqual({e["code"] for e in report_absent["errors"]}, {"E_RUN_NOT_FOUND"})
 
     def test_resume_reuses_terminal_cases_and_cleans_partial_case(self) -> None:
         with tempfile.TemporaryDirectory() as td:

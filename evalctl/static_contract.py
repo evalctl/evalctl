@@ -42,6 +42,7 @@ CODE_REGISTRY = {
     "E_SUITE_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["run", "report", "validate"], "retryable": False, "surface": "envelope"},
     "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report", "resume"], "retryable": False, "surface": "envelope"},
     "E_RUN_CORRUPT": {"class": "user-input", "exit": 1, "where": ["resume"], "retryable": False, "surface": "envelope"},
+    "E_RUN_IN_FLIGHT": {"class": "transient", "exit": 4, "where": ["report"], "retryable": True, "surface": "envelope"},
     "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_SPOOLCTL_UNAVAILABLE": {"class": "tool-env", "exit": 3, "where": ["run", "resume"], "retryable": False, "surface": "envelope"},
@@ -194,7 +195,7 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
     "case": CommandSpec("case", "Author cases, including case add.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
     "scorer": CommandSpec("scorer", "Author scorers, including built-in and command scorers.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--name": FlagSpec("enum", choices=frozenset(set(BUILTIN_SCORERS) | {"command"})), "--required": BOOL, "--advisory": BOOL, "--id": FlagSpec("safe_id"), "--argv": FlagSpec("text"), "--command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL, "--timeout": positive_int_spec()}, mutates=True, exit_codes=(0, 1, 5)),
     "status": CommandSpec("status", "Diagnose run state.", args=("run-id",), flags={"--json": BOOL, "--run-dir": FlagSpec("run_path")}),
-    "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path")}, exit_codes=(0, 1, 3)),
+    "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path")}, exit_codes=(0, 1, 3, 4)),
 }
 
 VERB_NAMES = frozenset(COMMAND_SPECS)
@@ -546,12 +547,16 @@ DATA_SCHEMAS = {
         },
     ),
     "status": schema_object(
-        ["run_id", "run_dir", "run", "cases", "recommended_action"],
+        ["run_id", "run_dir", "state", "recommended_action"],
         {
             "run_id": {"type": "string"},
             "run_dir": {"type": "string"},
+            "state": {"type": "string", "enum": ["completed", "running", "stale", "orphaned"]},
+            "progress": schema_object(["case_count", "terminal", "pending"], {"case_count": {"type": "integer", "minimum": 0}, "terminal": {"type": "integer", "minimum": 0}, "pending": {"type": "integer", "minimum": 0}}),
             "run": RUN_SUMMARY_SCHEMA,
             "cases": {"type": "array", "items": {"type": "object"}},
+            "reservation": {"type": "object"},
+            "queue_jobs": {"type": "array", "items": {"type": "object"}},
             "recommended_action": schema_object(["command", "rationale", "alternatives"], {"command": {"type": "string"}, "rationale": {"type": "string"}, "alternatives": {"type": "array", "items": {"type": "string"}}}),
         },
     ),

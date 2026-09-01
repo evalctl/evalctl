@@ -1042,38 +1042,55 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
     return 6 if triggered else 0
 
 
-def resolve_run(argv: list[str]) -> Path:
+def run_dir_from_argv(argv: list[str]) -> Path:
     spec = COMMAND_SPECS["report"] if argv and argv[0] == "report" else COMMAND_SPECS["status"]
     parsed = parse_command_args(argv, spec)
     run_dir = parsed_value(parsed, "--run-dir")
     if run_dir is not None:
-        path = Path(run_dir)
-    else:
-        args = list(parsed.positionals)
-        if len(args) < 2:
-            raise EvalctlError("E_RUN_NOT_FOUND", "run id or --run-dir is required", "try: evalctl status <run-id> --json", 1)
-        path = Path("evals") / "runs" / args[1]
-    if not (path / "manifest.json").exists():
-        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {path}", "try: evalctl run code-review --json", 1)
-    return path
+        return Path(run_dir)
+    args = list(parsed.positionals)
+    if len(args) < 2:
+        raise EvalctlError("E_RUN_NOT_FOUND", "run id or --run-dir is required", "try: evalctl status <run-id> --json", 1)
+    return Path("evals") / "runs" / args[1]
 
 
 def command_status(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["status"])
     if len(parsed.positionals) > 2:
         raise EvalctlError("E_CASE_INVALID", "status accepts at most one run positional", "try: evalctl status <run-id> --json", 1)
-    run_dir = resolve_run(argv)
-    manifest_doc = read_json(run_dir / "manifest.json")
-    report = report_data(run_dir)
-    data = {"run_id": manifest_doc["run_id"], "run_dir": str(run_dir), "run": report["run"], "cases": report["cases"], "recommended_action": {"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "inspect deterministic report and ranked failures", "alternatives": []}}
-    return print_envelope(data, json_mode=json_mode, human=f"{manifest_doc['run_id']}: {'pass' if report['run']['ok'] else 'fail'}", started=started)
+    run_dir = run_dir_from_argv(argv)
+    # A run "exists" for status the same way it does for `jobs get`: the run
+    # directory is present. E_RUN_NOT_FOUND is reserved for ids with no run dir.
+    if not run_dir.exists():
+        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_dir}", "try: evalctl run code-review --json", 1)
+    classification = classify_run_dir(run_dir)
+    if (run_dir / "manifest.json").exists():
+        report = report_data(run_dir)
+        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "run": report["run"], "cases": report["cases"], "progress": classification["cases"], "recommended_action": {"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "inspect deterministic report and ranked failures", "alternatives": []}}
+        human = f"{classification['run_id']}: {'pass' if report['run']['ok'] else 'fail'}"
+    else:
+        # In flight (or stale/orphaned): manifest.json is written only at
+        # finalize, so report deterministic scoring is not yet available.
+        # Report live state and per-case progress instead of failing.
+        progress = classification["cases"]
+        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "progress": progress, "reservation": classification["reservation"], "queue_jobs": classification["queue_jobs"], "recommended_action": {"command": f"evalctl status {classification['run_id']} --json", "rationale": "re-check live progress until the run finalizes", "alternatives": []}}
+        human = f"{classification['run_id']}: {classification['state']} ({progress['terminal']}/{progress['case_count']} cases)"
+    return print_envelope(data, json_mode=json_mode, human=human, started=started)
 
 
 def command_report(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["report"])
     if len(parsed.positionals) > 2:
         raise EvalctlError("E_CASE_INVALID", "report accepts at most one run positional", "try: evalctl report <run-id> --format json", 1)
-    run_dir = resolve_run(argv)
+    run_dir = run_dir_from_argv(argv)
+    if not run_dir.exists():
+        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_dir}", "try: evalctl run code-review --json", 1)
+    if not (run_dir / "manifest.json").exists():
+        # The run directory exists but has not finalized, so there is no
+        # deterministic report yet. Name the in-flight state instead of
+        # pretending the run does not exist.
+        state = classify_run_dir(run_dir)["state"]
+        raise EvalctlError("E_RUN_IN_FLIGHT", f"run {run_dir.name} is {state}; the report is available after the run finalizes", f"try: evalctl status {run_dir.name} --json", 4)
     data = report_data(run_dir)
     fmt = parsed_value(parsed, "--format", "json" if json_mode else "markdown")
     if fmt == "markdown" and not has_flag(argv, "--json"):

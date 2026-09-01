@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **`status` and `report` now see a run while it is still in flight.** Both verbs
+  keyed on `manifest.json`, which is written only at finalize, so mid-run they
+  returned `E_RUN_NOT_FOUND` (exit `1`) for a run that `jobs get` reported as
+  `running`. Now `status <run-id>` returns exit `0` with the live `state` and
+  per-case `progress` (`case_count`/`terminal`/`pending`), and `report <run-id>`
+  returns the new `E_RUN_IN_FLIGHT` (class `transient`, exit `4`, retryable)
+  naming the state and pointing at `status`, instead of pretending the run does
+  not exist. `E_RUN_NOT_FOUND` is now reserved for ids with no run directory, so
+  `jobs get`, `status`, and `report` never disagree about run existence.
+  `contract_version` remains `1`; report projection and report hashes are
+  unchanged.
+
 ## 0.4.4 - 2026-09-01
 
 Two exit codes that the contract advertised but that no code path exercised are
