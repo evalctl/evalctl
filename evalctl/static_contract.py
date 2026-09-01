@@ -53,6 +53,7 @@ CODE_REGISTRY = {
     "E_SCORER_CASE_FAILED": {"class": "tool-env", "where": ["run", "replay"], "surface": "score_json"},
     "E_RUN_BUSY": {"class": "transient", "exit": 4, "where": ["run", "resume"], "retryable": True, "surface": "envelope"},
     "E_RUN_CONFLICT": {"class": "conflict", "exit": 5, "where": ["run", "init", "replay", "suite", "case", "scorer"], "retryable": False, "surface": "envelope"},
+    "E_UNSANDBOXED_RUNNER_UNACK": {"class": "safety", "exit": 2, "where": ["run", "replay"], "retryable": False, "surface": "envelope"},
     "W_UNSANDBOXED_RUNNER": {"class": "warning", "where": ["run", "replay"], "surface": "envelope"},
     "W_REPLAY_CASE_ABSENT": {"class": "warning", "where": ["replay"], "surface": "envelope"},
     "W_NOTHING_TO_REPLAY": {"class": "warning", "where": ["replay"], "surface": "envelope"},
@@ -67,6 +68,15 @@ CODE_REGISTRY = {
     "W_INFERCTL_CAPTURE_FAILED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
     "W_INFERCTL_PREFLIGHT_BLOCKED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
 }
+
+ACK_UNSANDBOXED_ENV = "EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER"
+ACK_UNSANDBOXED_FLAG = "--acknowledge-unsandboxed-runner"
+_ACK_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def env_ack_unsandboxed() -> bool:
+    return os.environ.get(ACK_UNSANDBOXED_ENV, "").strip().lower() in _ACK_TRUTHY
+
 
 DOCTOR_COMPONENTS = frozenset({"runtime", "suite_root", "runs_root", "reservations", "spoolctl", "inferctl", "runner_safety"})
 OPTIONAL_COMPONENT_STATES = {"not_configured", "unknown"}
@@ -173,12 +183,13 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
             "--slots": positive_int_spec(),
             "--reservation-ttl": positive_int_spec(),
             "--fail-on-fail": BOOL,
+            "--acknowledge-unsandboxed-runner": BOOL,
         },
         mutates=True,
-        exit_codes=(0, 1, 3, 4, 5, 6),
+        exit_codes=(0, 1, 2, 3, 4, 5, 6),
     ),
     "jobs": CommandSpec("jobs", "Inspect and prune local run/reservation/queue state.", args=("list", "get", "prune"), subcommands=frozenset({"list", "get", "prune"}), flags={"--json": BOOL, "--yes": BOOL, "--force": BOOL, "--limit": positive_int_spec(maximum=MAX_JOBS_LIST_LIMIT), "--cursor": FlagSpec("text")}, mutates=True),
-    "replay": CommandSpec("replay", "Re-execute failed/errored cases from a source run into a linked partial run.", args=("run-id",), flags={"--json": BOOL, "--failed": BOOL, "--run-dir": FlagSpec("run_path"), "--suite": FlagSpec("suite_path"), "--run-id": FlagSpec("safe_id"), "--force": BOOL, "--jobs": positive_int_spec(), "--timeout": positive_int_spec(), "--fail-on-fail": BOOL}, mutates=True, exit_codes=(0, 1, 3, 4, 5, 6)),
+    "replay": CommandSpec("replay", "Re-execute failed/errored cases from a source run into a linked partial run.", args=("run-id",), flags={"--json": BOOL, "--failed": BOOL, "--run-dir": FlagSpec("run_path"), "--suite": FlagSpec("suite_path"), "--run-id": FlagSpec("safe_id"), "--force": BOOL, "--jobs": positive_int_spec(), "--timeout": positive_int_spec(), "--fail-on-fail": BOOL, "--acknowledge-unsandboxed-runner": BOOL}, mutates=True, exit_codes=(0, 1, 2, 3, 4, 5, 6)),
     "suite": CommandSpec("suite", "Author suites, including suite add.", args=("add", "name"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--runner-argv": FlagSpec("text"), "--runner-command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL}, mutates=True, exit_codes=(0, 1, 5)),
     "case": CommandSpec("case", "Author cases, including case add.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
     "scorer": CommandSpec("scorer", "Author scorers, including built-in and command scorers.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--name": FlagSpec("enum", choices=frozenset(set(BUILTIN_SCORERS) | {"command"})), "--required": BOOL, "--advisory": BOOL, "--id": FlagSpec("safe_id"), "--argv": FlagSpec("text"), "--command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL, "--timeout": positive_int_spec()}, mutates=True, exit_codes=(0, 1, 5)),
@@ -267,7 +278,7 @@ COMMANDS:
   validate [suite] [--json]        Validate suite files
   doctor [--component NAME] [--fast] [--json]
   plan <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--inferctl-task TASK] [--json]
-  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--inferctl-task TASK] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
+  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--inferctl-task TASK] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--acknowledge-unsandboxed-runner] [--json]
   jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
   suite add <name> [--runner-argv ARGV|--runner-command CMD --shell] [--json]
@@ -396,6 +407,7 @@ def capabilities_data(*, probe_spoolctl_func: Callable[..., dict[str, Any]] | No
             "EVALCTL_TASK_FILE": "task text file",
             "EVALCTL_DIFF_FILE": "review diff file when present",
             "SOURCE_DATE_EPOCH": "controls deterministic timestamps, including run created_ts",
+            "EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": "set truthy (1/true/yes/on) to let run/replay execute suite runner and scorer commands; without it (and without --acknowledge-unsandboxed-runner) run/replay refuse with exit 2",
         },
         "integrations": {
             "spoolctl": spoolctl_status,
@@ -589,7 +601,7 @@ Initialize: `evalctl init --json`
 Validate: `evalctl validate code-review --json`
 Diagnose: `evalctl doctor --json`
 Plan: `evalctl plan code-review --json`
-Run: `evalctl run code-review --json`
+Run: `evalctl run code-review --acknowledge-unsandboxed-runner --json`
 Inspect: `evalctl status <run-id> --json`
 Report: `evalctl report <run-id> --format json`
 Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
@@ -608,7 +620,13 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 5. Run `evalctl plan <suite> --json` to inspect the resolved case set, run/skip
    actions, concurrency tracks, optional integration posture, and paste-ready
    follow-up commands without creating a run directory or executing runners.
-6. Run `evalctl run <suite> --json`. Use `--inferctl-task TASK` when you want
+6. Run `evalctl run <suite> --acknowledge-unsandboxed-runner --json`. run and
+   replay execute the suite's runner and scorer commands as local code and are not
+   sandboxed, so they refuse with `E_UNSANDBOXED_RUNNER_UNACK` (exit 2) unless the
+   invoker acknowledges: pass `--acknowledge-unsandboxed-runner`, or set
+   `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1` once for automation. The
+   acknowledgment is the caller's, never the suite file's; inspect an untrusted
+   suite before acknowledging it. Use `--inferctl-task TASK` when you want
    best-effort inferctl preflight provenance captured before each runner executes.
    Absence, incompatibility, preflight blocks, and capture failures are warnings;
    runner execution and report scoring still proceed. evalctl v0.4 captures
@@ -648,6 +666,11 @@ covered by the same unsandboxed warning as runners.
 ## Exit-code branching
 
 `0` success, `1` input error, `2` safety block, `3` tool environment error, `4` retryable transient, `5` conflict, `6` eval failure from `run --fail-on-fail`.
+Exit `2` is emitted only by `E_UNSANDBOXED_RUNNER_UNACK`: `run`/`replay` refuse to
+execute an unacknowledged suite before any runner or scorer runs. Exit `6` keeps
+the envelope `ok:true` (the harness succeeded) with `data.run.ok:false` and
+`data.fail_on_fail_triggered:true`; branch on those fields, not on `ok`, and a
+one-line `eval failure:` summary is also written to stderr.
 
 ## Error-code surfaces
 

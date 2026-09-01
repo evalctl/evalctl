@@ -14,7 +14,7 @@ from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_V
 from .reports import report_data
 from .run_state import classify_run_dir, runs_root, runs_with_inferctl_state, runs_with_queue_state
 from .spoolctl import probe_spoolctl
-from .static_contract import DOCTOR_COMPONENTS, EvalctlError
+from .static_contract import ACK_UNSANDBOXED_ENV, ACK_UNSANDBOXED_FLAG, DOCTOR_COMPONENTS, EvalctlError, env_ack_unsandboxed
 from .suite import validate_suite
 
 
@@ -138,7 +138,18 @@ def probe_inferctl_component(run_dirs: list[Path], *, fast: bool) -> dict[str, A
 
 
 def probe_runner_safety() -> dict[str, Any]:
-    return component("healthy", "runner and scorer commands execute as local code; evalctl is not a sandbox", observed={"sandboxed": False}, warnings=[{"code": "W_UNSANDBOXED_RUNNER", "message": "inspect suites before running untrusted runner or scorer commands"}])
+    env_ack = env_ack_unsandboxed()
+    details = (
+        f"runner and scorer commands execute as local code; evalctl is not a sandbox; "
+        f"run/replay refuse with E_UNSANDBOXED_RUNNER_UNACK (exit 2) unless the invoker acknowledges via "
+        f"{ACK_UNSANDBOXED_FLAG} or {ACK_UNSANDBOXED_ENV}=1"
+    )
+    return component(
+        "healthy",
+        details,
+        observed={"sandboxed": False, "acknowledgment_env_set": env_ack, "acknowledgment_env": ACK_UNSANDBOXED_ENV},
+        warnings=[{"code": "W_UNSANDBOXED_RUNNER", "message": "inspect suites before running untrusted runner or scorer commands"}],
+    )
 
 
 def safe_component_probe(name: str, probe: Any) -> dict[str, Any]:

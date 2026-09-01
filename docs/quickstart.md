@@ -46,11 +46,14 @@ config.
 ## 4. Run
 
 ```bash
-evalctl run demo --json
+evalctl run demo --acknowledge-unsandboxed-runner --json
 ```
 
-The run produces a portable, resumable run directory. The runner is arbitrary
-local code — **evalctl is not a sandbox**, and every run envelope carries the
+The runner is arbitrary local code — **evalctl is not a sandbox**. `run` and
+`replay` refuse with exit `2` until the invoker acknowledges this, either with
+`--acknowledge-unsandboxed-runner` or by setting
+`EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`. Once acknowledged, the run produces a
+portable, resumable run directory, and every run envelope still carries the
 `W_UNSANDBOXED_RUNNER` warning.
 
 ## 5. Inspect and report
@@ -65,6 +68,7 @@ Use `--format markdown` for a human-readable report instead.
 ## The full loop
 
 ```bash
+export EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1  # or pass --acknowledge-unsandboxed-runner per run
 evalctl init --json
 evalctl suite add demo --runner-argv "python3 $EVALCTL_WORKSPACE/r.py" --json
 evalctl case add demo --task "do X" --workspace fixtures/x --expect-json '{"exact":"ok"}' --json

@@ -3,6 +3,7 @@ evalctl run  Run a suite and produce a portable, resumable run directory.
 USAGE: evalctl run <suite> [flags]
 
 FLAGS:
+  --acknowledge-unsandboxed-runner
   --fail-on-fail
   --help
   --inferctl-task ID
@@ -19,7 +20,7 @@ FLAGS:
 
 MUTATES: yes
 JSON ENVELOPE: yes
-EXIT CODES: 0 success; 1 user-input error; 3 tool-environment error; 4 transient failure; 5 conflict; 6 eval failure
+EXIT CODES: 0 success; 1 user-input error; 2 safety block; 3 tool-environment error; 4 transient failure; 5 conflict; 6 eval failure
 AGENT/AUTOMATION:
   Machine contract: evalctl capabilities --json
   Workflow guide:   evalctl robot-docs guide

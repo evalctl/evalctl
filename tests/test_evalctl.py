@@ -33,10 +33,18 @@ CMD = [sys.executable, "-m", "evalctl"]
 GOLDENS = ROOT / "tests" / "goldens"
 
 
+def setUpModule() -> None:
+    # run/replay refuse with exit 2 unless the invoker acknowledges the unsandboxed
+    # runner. Tests drive real runners, so acknowledge by default; the gate itself is
+    # tested explicitly by unsetting this in the relevant cases' env.
+    os.environ["EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER"] = "1"
+
+
 class EvalctlCliTests(unittest.TestCase):
     def run_cli(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env.setdefault("EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER", "1")
         if extra_env:
             env.update(extra_env)
         result = subprocess.run(CMD + args, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -224,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:2e6d5c9059dbf40709eb2e0bbd93996438ef90edeb1f227b957e6857d5cd2d5e")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:85f29a991dac091beb1aa1b7af80832ff3531c28203281aa9e7976424cabeef3")
             self.assertEqual(caps["tool_version"], "0.4.3")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -232,6 +240,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("inferctl_preflight_provenance", caps["data"]["features"])
             self.assertEqual(caps["data"]["error_codes"]["E_CASE_INVALID"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_COMMAND"]["exit"], 1)
+            self.assertEqual(caps["data"]["error_codes"]["E_UNSANDBOXED_RUNNER_UNACK"], {"class": "safety", "exit": 2, "retryable": False, "surface": "envelope", "where": ["run", "replay"]})
             self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_SUBCOMMAND"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_UNKNOWN_FLAG"]["surface"], "envelope")
             self.assertEqual(caps["data"]["error_codes"]["E_SPOOLCTL_UNAVAILABLE"]["exit"], 3)
@@ -2373,24 +2382,71 @@ class EvalctlCliTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertTrue(payload["ok"])
             self.assertFalse(payload["data"]["run"]["ok"])
+            self.assertTrue(payload["data"]["fail_on_fail_triggered"])
+            self.assertEqual(payload["errors"], [])
+            self.assertIn("eval failure:", result.stderr)
 
-    def test_unsandboxed_warning_stderr_only_when_unacknowledged_tty(self) -> None:
+    def test_fail_on_fail_not_triggered_when_run_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)  # cr-pass passes
+            result = self.run_cli(["run", "code-review", "--run-id", "pass", "--fail-on-fail", "--json"], cwd, expect=0)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["data"]["run"]["ok"])
+            self.assertFalse(payload["data"]["fail_on_fail_triggered"])
+            self.assertNotIn("eval failure:", result.stderr)
+
+    def test_unsandboxed_runner_warning_present_when_acknowledged(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
             self.envelope(["init", "--json"], cwd)
             acknowledged = self.run_cli(["run", "code-review", "--run-id", "ack", "--json"], cwd)
             ack_payload = json.loads(acknowledged.stdout)
             self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in ack_payload["warnings"]})
-            self.assertEqual(acknowledged.stderr, "")
 
+    def test_run_refuses_unacknowledged_unsandboxed_runner_with_exit_two(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            no_ack = {"EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": ""}
+            refused = self.run_cli(["run", "code-review", "--run-id", "unack", "--json"], cwd, expect=2, extra_env=no_ack)
+            payload = json.loads(refused.stdout)
+            self.assertFalse(payload["ok"])
+            self.assertEqual([e["code"] for e in payload["errors"]], ["E_UNSANDBOXED_RUNNER_UNACK"])
+            self.assertEqual(payload["errors"][0]["exit_code"], 2)
+            # gate fires before any runner executes: no run directory is created
+            self.assertFalse((cwd / "evals" / "runs" / "unack").exists())
+
+    def test_flag_acknowledges_unsandboxed_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            no_ack = {"EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": ""}
+            ok = self.run_cli(["run", "code-review", "--run-id", "flag", "--acknowledge-unsandboxed-runner", "--json"], cwd, expect=0, extra_env=no_ack)
+            self.assertTrue(json.loads(ok.stdout)["ok"])
+
+    def test_suite_field_does_not_satisfy_the_gate(self) -> None:
+        # A safety acknowledgment stored inside the suite (attacker-controllable)
+        # must NOT let an unacknowledged invoker execute the suite's runner.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
             suite = self.load_suite(cwd)
-            suite["acknowledged_unsandboxed_runner"] = False
+            suite["acknowledged_unsandboxed_runner"] = True
             self.write_suite(cwd, suite)
+            no_ack = {"EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": ""}
+            refused = self.run_cli(["run", "code-review", "--run-id", "field", "--json"], cwd, expect=2, extra_env=no_ack)
+            self.assertEqual([e["code"] for e in json.loads(refused.stdout)["errors"]], ["E_UNSANDBOXED_RUNNER_UNACK"])
 
-            unack_output = self.run_cli_with_controlling_tty(["run", "code-review", "--run-id", "unack", "--json"], cwd)
-            unack_payload = json.loads([line for line in unack_output.splitlines() if line.startswith("{")][-1])
-            self.assertIn("W_UNSANDBOXED_RUNNER", {w["code"] for w in unack_payload["warnings"]})
-            self.assertIn("runner commands execute arbitrary local code", unack_output)
+    def test_replay_refuses_unacknowledged_unsandboxed_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.run_cli(["run", "code-review", "--run-id", "src", "--json"], cwd)
+            no_ack = {"EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": ""}
+            refused = self.run_cli(["replay", "--failed", "src", "--run-id", "rp", "--json"], cwd, expect=2, extra_env=no_ack)
+            self.assertEqual([e["code"] for e in json.loads(refused.stdout)["errors"]], ["E_UNSANDBOXED_RUNNER_UNACK"])
 
     def test_runner_timeout_is_reportable_case_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:

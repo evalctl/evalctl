@@ -13,6 +13,8 @@ from typing import Any
 from . import __version__
 
 from .static_contract import (
+    ACK_UNSANDBOXED_ENV,
+    ACK_UNSANDBOXED_FLAG,
     BOOL,
     COMMAND_SPECS,
     DEFAULT_JOBS_LIST_LIMIT,
@@ -28,6 +30,7 @@ from .static_contract import (
     FlagSpec,
     ParsedArgs,
     capabilities_data as _static_capabilities_data,
+    env_ack_unsandboxed,
     envelope,
     global_flag_specs_for,
     help_text,
@@ -752,6 +755,29 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
     return print_envelope(data, json_mode=json_mode, human=f"plan {suite_name}: {will_run} run, {will_skip} skip, {blocked} blocked", warnings=warnings, commands=commands, started=started)
 
 
+FAIL_ON_FAIL_STDERR = "eval failure: one or more cases did not pass (--fail-on-fail)"
+
+
+def require_runner_acknowledgment(parsed: ParsedArgs) -> None:
+    if parsed_bool(parsed, ACK_UNSANDBOXED_FLAG) or env_ack_unsandboxed():
+        return
+    raise EvalctlError(
+        "E_UNSANDBOXED_RUNNER_UNACK",
+        "run and replay execute the suite's runner and scorer commands as local code; evalctl is not a sandbox",
+        f"inspect the suite, then pass {ACK_UNSANDBOXED_FLAG} or set {ACK_UNSANDBOXED_ENV}=1",
+        2,
+    )
+
+
+def mark_fail_on_fail(parsed: ParsedArgs, data: dict[str, Any], run_ok: bool) -> bool:
+    """Record the fail-on-fail branch field on data (before it is serialized) and
+    return whether exit 6 should fire. Caller prints the envelope, then the stderr
+    summary line, then returns 6 if triggered."""
+    triggered = parsed_bool(parsed, "--fail-on-fail") and not run_ok
+    data["fail_on_fail_triggered"] = triggered
+    return triggered
+
+
 def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["run"])
     resume_id = parsed_value(parsed, "--resume")
@@ -760,6 +786,7 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     args = list(parsed.positionals)
     if len(args) < 2:
         raise EvalctlError("E_SUITE_NOT_FOUND", "run requires a suite name", "try: evalctl run code-review --json", 1)
+    require_runner_acknowledgment(parsed)
     queue_backend = parsed_value(parsed, "--queue")
     slots_raw = parsed_value(parsed, "--slots")
     if slots_raw is not None and queue_backend is None:
@@ -777,8 +804,6 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
     suite = read_json(suite_dir / "suite.json")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
     unsandboxed_warning = {"code": "W_UNSANDBOXED_RUNNER", "message": "runner commands execute arbitrary local code; evalctl is not a sandbox"}
-    if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
-        print(unsandboxed_warning["message"], file=sys.stderr)
     run_id = run_id_value if run_id_value is not None else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ-") + suite.get("name", suite_dir.name)
     run_dir = Path("evals") / "runs" / run_id
     if run_dir.exists():
@@ -798,15 +823,19 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
             raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
         raise EvalctlError("E_RUN_BUSY", f"run {run_id} is incomplete and may be resumable", f"retry with: evalctl run --resume {run_id} --json", 4)
     data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots, inferctl_task)
+    triggered = mark_fail_on_fail(parsed, data, run_ok)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
-    return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
+    if triggered:
+        print(FAIL_ON_FAIL_STDERR, file=sys.stderr)
+    return 6 if triggered else 0
 
 
 def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: float, *, parsed: ParsedArgs | None = None) -> int:
     parsed = parsed or parse_command_args(argv, COMMAND_SPECS["run"])
     if not is_safe_id(run_id) or "/" in run_id or "\\" in run_id:
         raise EvalctlError("E_CASE_INVALID", f"invalid run id: {run_id}", "use a simple run id with letters, numbers, dot, underscore, or dash", 1)
+    require_runner_acknowledgment(parsed)
     run_dir = Path("evals") / "runs" / run_id
     if not run_dir.exists():
         raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_id}", "resume an existing incomplete run id", 1)
@@ -852,9 +881,12 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
             warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
         data, run_ok = finalize_run(run_dir, metadata, case_entries)
         clear_reservation(run_dir)
+    triggered = mark_fail_on_fail(parsed, data, run_ok)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
     print_envelope(data, json_mode=json_mode, human=f"Resume {run_id}: {'pass' if run_ok else 'fail'}", warnings=dedupe_warnings(warnings), commands=commands, started=started)
-    return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
+    if triggered:
+        print(FAIL_ON_FAIL_STDERR, file=sys.stderr)
+    return 6 if triggered else 0
 
 
 def command_doctor(argv: list[str], json_mode: bool, started: float) -> int:
@@ -953,6 +985,7 @@ def parse_replay_source(argv: list[str]) -> Path:
 
 def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["replay"])
+    require_runner_acknowledgment(parsed)
     source_run = parse_replay_source(argv)
     source_manifest = read_json(source_run / "manifest.json")
     source_report = report_data(source_run)
@@ -999,13 +1032,14 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
             shutil.rmtree(run_dir)
         else:
             raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl replay with a new --run-id", 4)
-    if not suite.get("acknowledged_unsandboxed_runner") and sys.stderr.isatty():
-        print("runner commands execute arbitrary local code; evalctl is not a sandbox", file=sys.stderr)
     data, run_warnings, run_ok = execute_cases(suite_dir, suite, target_cases, run_dir, run_id, jobs, timeout_override, source_manifest["run_id"])
+    triggered = mark_fail_on_fail(parsed, data, run_ok)
     all_warnings = run_warnings + warnings
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "inspect replay report"}]
     print_envelope(data, json_mode=json_mode, human=f"Replay {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
-    return 6 if parsed_bool(parsed, "--fail-on-fail") and not run_ok else 0
+    if triggered:
+        print(FAIL_ON_FAIL_STDERR, file=sys.stderr)
+    return 6 if triggered else 0
 
 
 def resolve_run(argv: list[str]) -> Path:

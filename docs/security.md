@@ -12,9 +12,27 @@ command scorers are arbitrary local commands that evalctl executes on your
 machine with your privileges. Treat a suite the way you'd treat any script you're
 about to run.
 
+## The acknowledgment gate
+
+`run` and `replay` execute the suite's runner and scorer commands as local code.
+Before either runs a single command, the invoker must acknowledge this:
+
+```bash
+evalctl run demo --acknowledge-unsandboxed-runner --json
+# or, for a whole session:
+export EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1
+```
+
+Without the flag or the env var, `run` and `replay` refuse with
+`E_UNSANDBOXED_RUNNER_UNACK` and exit `2` (safety block) before any command
+executes. The acknowledgment lives with the **invoker**, not in the suite file —
+a field inside the suite would be controlled by whoever wrote the suite, so it
+could not defend you against an untrusted one. Inspect the suite, then
+acknowledge.
+
 ## The unsandboxed-runner warning
 
-Every `run` and `replay` envelope carries `W_UNSANDBOXED_RUNNER` — including
+Every `run` and `replay` envelope also carries `W_UNSANDBOXED_RUNNER` — including
 completed-run reuse. It is not situational; it is a standing reminder that the
 runner (and any command scorer) is unsandboxed local code. If you need
 isolation, provide it around evalctl (containers, VMs, restricted users);

@@ -39,8 +39,16 @@ version is always `evalctl capabilities --json`; this page is the human summary.
 
 Key `run` flags: `--jobs N` (bounded parallelism), `--timeout S`, `--run-id ID`,
 `--queue spoolctl --slots N`, `--reservation-ttl S`, and `--fail-on-fail` (exit
-`6` when any case fails instead of `0`). `plan` accepts the same execution flags
-as `run` and prints the plan without touching disk.
+`6` with `data.fail_on_fail_triggered: true` when any case fails, instead of
+`0`). `plan` accepts the same execution flags as `run` and prints the plan
+without touching disk.
+
+Because they execute the suite's runner and scorer commands as local code, `run`
+and `replay` require the invoker to acknowledge that evalctl is not a sandbox:
+pass `--acknowledge-unsandboxed-runner` or set
+`EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`. Without it they refuse with
+`E_UNSANDBOXED_RUNNER_UNACK` and exit `2` before any command runs. `plan` never
+executes runners, so it needs no acknowledgment.
 
 Both `run` and `plan` also accept `--inferctl-task TASK` for the **planned**
 inferctl integration; it is not yet available, so requesting it records a

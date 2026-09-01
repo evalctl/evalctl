@@ -18,7 +18,7 @@ reference.
 | --- | --- | --- |
 | `0` | success | — |
 | `1` | user-input error | no |
-| `2` | safety block | no |
+| `2` | safety block (`run`/`replay` runner not acknowledged) | no |
 | `3` | tool-environment error | — |
 | `4` | transient failure | **yes** |
 | `5` | conflict | no |
@@ -42,6 +42,11 @@ A runner timeout, spawn failure, or command-scorer failure is reportable case
 data: `run`/`replay` exit `0` by default (or `6` with `--fail-on-fail`), emit
 `W_PARTIAL_RUN`, and keep the per-case reason code **out** of `errors[]`.
 
+Exit `6` keeps the envelope `ok: true` (the harness succeeded; the eval did not).
+Branch on `data.fail_on_fail_triggered`, not on `ok` — it is `true` only when
+`--fail-on-fail` was passed and at least one case did not pass, and evalctl also
+prints a one-line `eval failure:` summary to stderr.
+
 ## Error codes
 
 | Code | Class | Exit | Surface |
@@ -55,6 +60,7 @@ data: `run`/`replay` exit `0` by default (or `6` with `--fail-on-fail`), emit
 | `E_UNKNOWN_SUBCOMMAND` | user-input | 1 | envelope |
 | `E_UNKNOWN_FLAG` | user-input | 1 | envelope |
 | `E_UNKNOWN_COMPONENT` | user-input | 1 | envelope |
+| `E_UNSANDBOXED_RUNNER_UNACK` | safety | 2 | envelope |
 | `E_RUNNER_FAILED` | tool-env | 3 | runner_json |
 | `E_RUNNER_TIMEOUT` | tool-env | 3 | runner_json |
 | `E_SPOOLCTL_UNAVAILABLE` | tool-env | 3 | envelope |
@@ -94,6 +100,11 @@ request degrades to `W_INFERCTL_ABSENT` rather than capturing route provenance.
 
 ## Common cases
 
+- **`E_UNSANDBOXED_RUNNER_UNACK`** — `run`/`replay` refuse (exit `2`) because the
+  invoker has not acknowledged that runner and scorer commands execute as local
+  code. Inspect the suite, then pass `--acknowledge-unsandboxed-runner` or set
+  `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`. The acknowledgment must come from
+  the invoker; a suite-file field cannot satisfy it.
 - **`E_RUN_BUSY`** — a live reservation holds the run. Wait, or take it over with
   an explicit `run --resume`. Retryable.
 - **`E_RUN_CONFLICT`** — you reused a key/run-id with different content, or an

@@ -15,8 +15,12 @@ everything else.
 ## Enabling it
 
 ```bash
-evalctl run demo --queue spoolctl --slots 4 --json
+evalctl run demo --queue spoolctl --slots 4 --acknowledge-unsandboxed-runner --json
 ```
+
+The queue path still executes local runner code, so the invoker's acknowledgment
+(`--acknowledge-unsandboxed-runner` or `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`)
+is required here too, or the run refuses with exit `2`.
 
 Requires spoolctl `>= 0.4.11` (queue contract v2). If spoolctl is **absent or
 incompatible**, a queued

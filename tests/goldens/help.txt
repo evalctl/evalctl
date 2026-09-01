@@ -10,7 +10,7 @@ COMMANDS:
   validate [suite] [--json]        Validate suite files
   doctor [--component NAME] [--fast] [--json]
   plan <suite> [--jobs N] [--timeout S] [--run-id ID] [--resume ID] [--queue spoolctl] [--slots N] [--inferctl-task TASK] [--json]
-  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--inferctl-task TASK] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--json]
+  run <suite> [--jobs N] [--timeout S] [--run-id ID] [--inferctl-task TASK] [--resume ID] [--queue spoolctl] [--slots N] [--reservation-ttl S] [--fail-on-fail] [--acknowledge-unsandboxed-runner] [--json]
   jobs list|get|prune [--yes] [--json]
   replay --failed <run-id|--run-dir PATH> [--suite S] [--run-id NEW] [--force] [--json]
   suite add <name> [--runner-argv ARGV|--runner-command CMD --shell] [--json]

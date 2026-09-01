@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+Two exit codes that the contract advertised but that no code path exercised are
+now wired to real behavior. `contract_version` remains `1`; command names,
+envelope shape, error codes, exit codes, case statuses, and report projection are
+unchanged, and report hashes are unaffected.
+
+- **Exit `2` (safety block) is now reachable: `run`/`replay` refuse to execute an
+  unacknowledged unsandboxed runner.** Runner and scorer commands are local code
+  that evalctl executes with the caller's privileges. `run`, `run --resume`, and
+  `replay` now refuse with `E_UNSANDBOXED_RUNNER_UNACK` (class `safety`, exit `2`)
+  before running any command, unless the **invoker** acknowledges via the new
+  `--acknowledge-unsandboxed-runner` flag or `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`.
+  The acknowledgment deliberately lives with the invoker, not in the suite file:
+  a suite-file field is controlled by whoever authored the suite, so it could not
+  defend against an untrusted one. The former scaffold field
+  `acknowledged_unsandboxed_runner` is removed, and the standing
+  `W_UNSANDBOXED_RUNNER` warning still rides every `run`/`replay` envelope. This
+  is a behavior change: existing callers of `run`/`replay` must now acknowledge.
+- **Exit `6` (`run --fail-on-fail`) is machine-branchable.** The envelope still
+  reports `ok: true` (the harness succeeded even though the eval did not), and now
+  carries `data.fail_on_fail_triggered` -- `true` only when `--fail-on-fail` was
+  passed and at least one case did not pass. evalctl also prints a one-line
+  `eval failure:` summary to stderr. Branch on the field, not on `ok`.
+
 ## 0.4.3 - 2026-07-29
 
 `--help` now works per verb and no longer runs the verb. Queued runs read

@@ -10,6 +10,7 @@
       "message": "unknown flag '--bogus'",
       "requires_value": true,
       "valid_values": [
+        "--acknowledge-unsandboxed-runner",
         "--fail-on-fail",
         "--help",
         "--inferctl-task",

@@ -96,6 +96,7 @@ class RealSpoolctlQueueTests(unittest.TestCase):
     def run_cli(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env.setdefault("EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER", "1")
         if extra_env:
             env.update(extra_env)
         result = subprocess.run(CMD + args, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

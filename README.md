@@ -87,6 +87,7 @@ pip install -e .
 Scaffold a project, author a suite, run it, and read the report:
 
 ```bash
+export EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1  # or pass --acknowledge-unsandboxed-runner per run
 evalctl init --json
 evalctl suite add demo --runner-argv "python3 $EVALCTL_WORKSPACE/r.py" --json
 evalctl case add demo --task "do X" --workspace fixtures/x --expect-json '{"exact":"ok"}' --json

@@ -14,8 +14,13 @@ separate: **execution replay** (re-run the failed cases) and **artifact replay**
 ## Execution replay
 
 ```bash
-evalctl replay --failed <run-id> --json
+evalctl replay --failed <run-id> --acknowledge-unsandboxed-runner --json
 ```
+
+Like `run`, `replay` re-executes local runner and scorer commands, so it
+requires the invoker's acknowledgment (`--acknowledge-unsandboxed-runner` or
+`EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`) or it refuses with exit `2`. Artifact
+replay (below) only re-scores stored artifacts and needs no acknowledgment.
 
 `replay --failed` selects failed/errored cases from the **recomputed report
 projection** of the source run — not from `score.json` or the stored manifest

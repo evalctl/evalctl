@@ -25,8 +25,12 @@ trust the marker: a case is either fully done or not counted.
 ## Resume
 
 ```bash
-evalctl run --resume <run-id> --json
+evalctl run --resume <run-id> --acknowledge-unsandboxed-runner --json
 ```
+
+Resume re-executes local runner code, so it needs the invoker's acknowledgment
+(`--acknowledge-unsandboxed-runner` or `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`)
+just like a fresh run, or it refuses with exit `2`.
 
 Resume reuses the original suite snapshot and run parameters from `run.json`,
 skips terminal cases, deletes partial unfinished case directories, executes only

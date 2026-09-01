@@ -58,7 +58,6 @@ def init_project(force: bool = False) -> dict[str, Any]:
     suite_json = {
         "name": "code-review",
         "cases": "cases.jsonl",
-        "acknowledged_unsandboxed_runner": True,
         "runner": {
             "argv": ["python3", "$EVALCTL_WORKSPACE/runner.py"],
             "shell": False,
@@ -125,7 +124,6 @@ def suite_add_data(name: str, runner: dict[str, Any], *, _validator: Any = valid
     suite_json = {
         "name": name,
         "cases": "cases.jsonl",
-        "acknowledged_unsandboxed_runner": True,
         "runner": runner,
         "scorers": [],
     }

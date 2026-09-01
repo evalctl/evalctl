@@ -27,8 +27,10 @@ branch on what it reports.
 1. Scaffold `evals/suites/code-review/` with `evalctl init`, **or** author a new
    suite: `suite add`, create fixtures, `case add`, `scorer add`.
 2. `evalctl validate <suite> --json` **before** executing local code.
-3. `evalctl run <suite> --json`. The runner is arbitrary local code; evalctl is
-   not a sandbox.
+3. `evalctl run <suite> --acknowledge-unsandboxed-runner --json`. The runner is
+   arbitrary local code; evalctl is not a sandbox. `run`/`replay` refuse with
+   exit `2` (`E_UNSANDBOXED_RUNNER_UNACK`) until the invoker acknowledges, via
+   that flag or `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1`.
 4. If a run is interrupted, `evalctl run --resume <run-id> --json`. Resume reuses
    `run.json`, terminal `state.json` markers, and the original suite snapshot; it
    skips terminal cases and re-runs only unfinished ones.
@@ -60,7 +62,9 @@ A runner timeout, runner spawn failure, or command-scorer failure is **reportabl
 case data**, not a command failure. By default `run`/`replay` still exit `0`,
 emit `W_PARTIAL_RUN`, and record the per-case reason under
 `runner.json.error_code` or the scorer verdict — they do **not** appear in
-`errors[]`. Pass `--fail-on-fail` to turn a failed case into exit `6`.
+`errors[]`. Pass `--fail-on-fail` to turn a failed case into exit `6`; the
+envelope stays `ok: true`, so branch on `data.fail_on_fail_triggered` rather than
+on `ok`.
 
 ## Why the artifact matters
 

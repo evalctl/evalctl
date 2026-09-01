@@ -3,6 +3,7 @@
   "data": {
     "contract_version": 1,
     "env_vars": {
+      "EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": "set truthy (1/true/yes/on) to let run/replay execute suite runner and scorer commands; without it (and without --acknowledge-unsandboxed-runner) run/replay refuse with exit 2",
       "EVALCTL_CASE_FILE": "materialized case JSON passed to runner",
       "EVALCTL_DIFF_FILE": "review diff file when present",
       "EVALCTL_OUTPUT_FILE": "runner response destination",
@@ -208,6 +209,16 @@
         "surface": "envelope",
         "where": [
           "dispatch"
+        ]
+      },
+      "E_UNSANDBOXED_RUNNER_UNACK": {
+        "class": "safety",
+        "exit": 2,
+        "retryable": false,
+        "surface": "envelope",
+        "where": [
+          "run",
+          "replay"
         ]
       },
       "W_INFERCTL_ABSENT": {
@@ -491,6 +502,7 @@
         "exit_codes": [
           0,
           1,
+          2,
           3,
           4,
           5,
@@ -505,7 +517,8 @@
           "--force",
           "--jobs",
           "--timeout",
-          "--fail-on-fail"
+          "--fail-on-fail",
+          "--acknowledge-unsandboxed-runner"
         ],
         "json": true,
         "mutates": true
@@ -548,6 +561,7 @@
         "exit_codes": [
           0,
           1,
+          2,
           3,
           4,
           5,
@@ -563,7 +577,8 @@
           "--queue",
           "--slots",
           "--reservation-ttl",
-          "--fail-on-fail"
+          "--fail-on-fail",
+          "--acknowledge-unsandboxed-runner"
         ],
         "json": true,
         "mutates": true
@@ -664,7 +679,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:2e6d5c9059dbf40709eb2e0bbd93996438ef90edeb1f227b957e6857d5cd2d5e",
+    "data_hash": "sha256:85f29a991dac091beb1aa1b7af80832ff3531c28203281aa9e7976424cabeef3",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

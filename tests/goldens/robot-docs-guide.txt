@@ -8,7 +8,7 @@ Initialize: `evalctl init --json`
 Validate: `evalctl validate code-review --json`
 Diagnose: `evalctl doctor --json`
 Plan: `evalctl plan code-review --json`
-Run: `evalctl run code-review --json`
+Run: `evalctl run code-review --acknowledge-unsandboxed-runner --json`
 Inspect: `evalctl status <run-id> --json`
 Report: `evalctl report <run-id> --format json`
 Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
@@ -27,7 +27,13 @@ Artifact replay: `evalctl report --run-dir <copied-run-dir> --format json`
 5. Run `evalctl plan <suite> --json` to inspect the resolved case set, run/skip
    actions, concurrency tracks, optional integration posture, and paste-ready
    follow-up commands without creating a run directory or executing runners.
-6. Run `evalctl run <suite> --json`. Use `--inferctl-task TASK` when you want
+6. Run `evalctl run <suite> --acknowledge-unsandboxed-runner --json`. run and
+   replay execute the suite's runner and scorer commands as local code and are not
+   sandboxed, so they refuse with `E_UNSANDBOXED_RUNNER_UNACK` (exit 2) unless the
+   invoker acknowledges: pass `--acknowledge-unsandboxed-runner`, or set
+   `EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER=1` once for automation. The
+   acknowledgment is the caller's, never the suite file's; inspect an untrusted
+   suite before acknowledging it. Use `--inferctl-task TASK` when you want
    best-effort inferctl preflight provenance captured before each runner executes.
    Absence, incompatibility, preflight blocks, and capture failures are warnings;
    runner execution and report scoring still proceed. evalctl v0.4 captures
@@ -67,6 +73,11 @@ covered by the same unsandboxed warning as runners.
 ## Exit-code branching
 
 `0` success, `1` input error, `2` safety block, `3` tool environment error, `4` retryable transient, `5` conflict, `6` eval failure from `run --fail-on-fail`.
+Exit `2` is emitted only by `E_UNSANDBOXED_RUNNER_UNACK`: `run`/`replay` refuse to
+execute an unacknowledged suite before any runner or scorer runs. Exit `6` keeps
+the envelope `ok:true` (the harness succeeded) with `data.run.ok:false` and
+`data.fail_on_fail_triggered:true`; branch on those fields, not on `ok`, and a
+one-line `eval failure:` summary is also written to stderr.
 
 ## Error-code surfaces
 
