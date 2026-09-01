@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.4 - 2026-09-01
 
 Two exit codes that the contract advertised but that no code path exercised are
 now wired to real behavior. `contract_version` remains `1`; command names,
