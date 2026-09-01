@@ -52,6 +52,19 @@
   silently coerced into a single literal argv token that validated and then
   errored at run time. It is now `E_CASE_INVALID` (exit `1`) naming the shape
   the flag wants.
+- **Not-found and unknown-verb errors now name the valid set.** A missing suite
+  (`E_SUITE_NOT_FOUND`), a missing run (`E_RUN_NOT_FOUND`), or an unknown
+  `schema` verb reported only the bad value. They now carry `valid_values` -- the
+  suites on disk, the runs on disk, the schema verbs the tool holds -- with a
+  near-match `did_you_mean` where one exists; `schema <bad-verb>` also carries a
+  paste-ready `corrected_command`. A suggestion is offered only within one
+  vocabulary, never across unrelated flags. `schema <bad-verb>` is now
+  `E_UNKNOWN_COMMAND` (the code its dispatch sibling already used) instead of a
+  generic parse error.
+- **`init` on an unwritable directory is a declared tool-environment error.**
+  Scaffolding into a read-only directory surfaced as an undeclared internal error.
+  It is now `E_INIT_UNWRITABLE` (class `tool-env`, exit `3`) naming the OS reason
+  and pointing at the write-permission fix.
 
 ## 0.4.4 - 2026-09-01
 

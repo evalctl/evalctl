@@ -36,7 +36,7 @@ EXIT_CODES = {
 
 CODE_REGISTRY = {
     "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
-    "E_UNKNOWN_COMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
+    "E_UNKNOWN_COMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch", "schema"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_SUBCOMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_FLAG": {"class": "user-input", "exit": 1, "where": ["run", "replay", "jobs", "plan", "doctor"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_COMPONENT": {"class": "user-input", "exit": 1, "where": ["doctor"], "retryable": False, "surface": "envelope"},
@@ -45,6 +45,7 @@ CODE_REGISTRY = {
     "E_RUN_NOT_FOUND": {"class": "user-input", "exit": 1, "where": ["status", "report", "resume"], "retryable": False, "surface": "envelope"},
     "E_RUN_CORRUPT": {"class": "user-input", "exit": 1, "where": ["resume"], "retryable": False, "surface": "envelope"},
     "E_RUN_IN_FLIGHT": {"class": "transient", "exit": 4, "where": ["report"], "retryable": True, "surface": "envelope"},
+    "E_INIT_UNWRITABLE": {"class": "tool-env", "exit": 3, "where": ["init"], "retryable": None, "surface": "envelope"},
     "E_RUNNER_FAILED": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_RUNNER_TIMEOUT": {"class": "tool-env", "exit": 3, "where": ["run"], "retryable": None, "surface": "runner_json"},
     "E_SPOOLCTL_UNAVAILABLE": {"class": "tool-env", "exit": 3, "where": ["run", "resume"], "retryable": False, "surface": "envelope"},
@@ -153,7 +154,7 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
     "capabilities": CommandSpec("capabilities", "Return the machine contract.", flags={"--json": BOOL}, exit_codes=(0,)),
     "schema": CommandSpec("schema", "Return output schemas.", args=("verb",), flags={"--json": BOOL}),
     "robot-docs": CommandSpec("robot-docs", "Return agent workflow guide.", args=("guide",), subcommands=frozenset({"guide"}), json=False),
-    "init": CommandSpec("init", "Scaffold evals/ tree with sample code-review suite.", flags={"--json": BOOL, "--force": BOOL}, mutates=True, exit_codes=(0, 5)),
+    "init": CommandSpec("init", "Scaffold evals/ tree with sample code-review suite.", flags={"--json": BOOL, "--force": BOOL}, mutates=True, exit_codes=(0, 3, 5)),
     "validate": CommandSpec("validate", "Validate suite.json, cases.jsonl, fixtures, scorer refs, and runner config.", args=("suite",), flags={"--json": BOOL}),
     "doctor": CommandSpec("doctor", "Diagnose evalctl runtime, run state, and optional integrations.", flags={"--json": BOOL, "--component": FlagSpec("text"), "--fast": BOOL}, mega_command="DIAGNOSE"),
     "plan": CommandSpec(

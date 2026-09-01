@@ -40,6 +40,15 @@
           "doctor"
         ]
       },
+      "E_INIT_UNWRITABLE": {
+        "class": "tool-env",
+        "exit": 3,
+        "retryable": null,
+        "surface": "envelope",
+        "where": [
+          "init"
+        ]
+      },
       "E_JOB_TRANSIENT": {
         "class": "transient",
         "exit": 4,
@@ -186,7 +195,8 @@
         "retryable": false,
         "surface": "envelope",
         "where": [
-          "dispatch"
+          "dispatch",
+          "schema"
         ]
       },
       "E_UNKNOWN_COMPONENT": {
@@ -458,6 +468,7 @@
         "description": "Scaffold evals/ tree with sample code-review suite.",
         "exit_codes": [
           0,
+          3,
           5
         ],
         "flags": [
@@ -703,7 +714,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:7ca5b5f1b6fb62ef69c03928f47018f7b42073d9522613f963d5f3bc518f8244",
+    "data_hash": "sha256:10f6799303a2a76de42b6dbb00e166b01a78580ad2fe30c9f9072e69f64b5b36",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

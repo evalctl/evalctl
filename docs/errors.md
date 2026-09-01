@@ -61,6 +61,7 @@ prints a one-line `eval failure:` summary to stderr.
 | `E_UNKNOWN_FLAG` | user-input | 1 | envelope |
 | `E_UNKNOWN_COMPONENT` | user-input | 1 | envelope |
 | `E_UNSANDBOXED_RUNNER_UNACK` | safety | 2 | envelope |
+| `E_INIT_UNWRITABLE` | tool-env | 3 | envelope |
 | `E_RUNNER_FAILED` | tool-env | 3 | runner_json |
 | `E_RUNNER_TIMEOUT` | tool-env | 3 | runner_json |
 | `E_SPOOLCTL_UNAVAILABLE` | tool-env | 3 | envelope |

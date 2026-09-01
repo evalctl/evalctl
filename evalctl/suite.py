@@ -14,6 +14,11 @@ from .static_contract import BUILTIN_SCORERS, EvalctlError, SAFE_ID_RE, sha256_t
 VALID_SCORER_NAMES = frozenset(set(BUILTIN_SCORERS) | {"command"})
 
 
+def available_suites() -> list[str]:
+    root = Path("evals") / "suites"
+    return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
+
+
 def resolve_suite(suite: str | None) -> Path:
     suite = suite or "code-review"
     direct = Path(suite)
@@ -22,7 +27,13 @@ def resolve_suite(suite: str | None) -> Path:
     candidate = Path("evals") / "suites" / suite
     if candidate.exists():
         return candidate
-    raise EvalctlError("E_SUITE_NOT_FOUND", f"suite not found: {suite}", "try: evalctl init && evalctl validate code-review --json", 1)
+    valid = available_suites()
+    ctx: dict[str, Any] = {"valid_values": valid}
+    suggestion = difflib.get_close_matches(suite, valid, n=1, cutoff=0.6) if valid else []
+    if suggestion:
+        ctx["did_you_mean"] = suggestion[0]
+    hint = f"available suites: {', '.join(valid)}" if valid else "try: evalctl init to scaffold the sample suite"
+    raise EvalctlError("E_SUITE_NOT_FOUND", f"suite not found: {suite}", hint, 1, **ctx)
 
 
 def validate_suite(suite_dir: Path) -> dict[str, Any]:

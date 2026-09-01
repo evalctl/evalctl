@@ -17,6 +17,7 @@ from .static_contract import (
     ACK_UNSANDBOXED_FLAG,
     BOOL,
     COMMAND_SPECS,
+    DATA_SCHEMAS,
     DEFAULT_CASE_PAGE_LIMIT,
     DEFAULT_JOBS_LIST_LIMIT,
     DEFAULT_RESERVATION_TTL_SECONDS,
@@ -450,7 +451,16 @@ def command_schema(argv: list[str], json_mode: bool, started: float) -> int:
     args = list(parsed.positionals)
     if len(args) > 2:
         raise EvalctlError("E_CASE_INVALID", "schema accepts at most one verb", "try: evalctl schema run --json", 1)
-    return print_envelope(schema_data(args[1] if len(args) > 1 else None), json_mode=True, started=started)
+    verb = args[1] if len(args) > 1 else None
+    if verb is not None and verb not in DATA_SCHEMAS:
+        valid = sorted(DATA_SCHEMAS)
+        ctx: dict[str, Any] = {"valid_values": valid}
+        suggestion = nearest(verb, set(valid))
+        if suggestion:
+            ctx["did_you_mean"] = suggestion
+            ctx["corrected_command"] = command_string(["schema", suggestion, *args[2:]])
+        raise EvalctlError("E_UNKNOWN_COMMAND", f"unknown schema verb '{verb}'", f"valid schema verbs: {', '.join(valid)}", 1, **ctx)
+    return print_envelope(schema_data(verb), json_mode=True, started=started)
 
 
 def command_robot_docs(argv: list[str], json_mode: bool, started: float) -> int:
@@ -503,7 +513,11 @@ def command_init(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["init"])
     if len(parsed.positionals) != 1:
         raise EvalctlError("E_CASE_INVALID", "init accepts only flags", "try: evalctl init --json", 1)
-    data = init_project(force=parsed_bool(parsed, "--force"))
+    try:
+        data = init_project(force=parsed_bool(parsed, "--force"))
+    except OSError as exc:
+        detail = exc.strerror or str(exc)
+        raise EvalctlError("E_INIT_UNWRITABLE", f"cannot scaffold evals/ tree: {detail}", "check write permissions on this directory, then retry", 3)
     return print_envelope(data, json_mode=json_mode, human=f"Created {data['created']} with suite {data['suite']}", started=started)
 
 
@@ -719,7 +733,7 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
     if resume_id is not None:
         run_dir = Path("evals") / "runs" / resume_id
         if not run_dir.exists():
-            raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {resume_id}", "resume an existing incomplete run id", 1)
+            raise run_not_found_error(resume_id, "resume an existing incomplete run id")
         metadata = read_run_metadata(run_dir)
         suite_dir = run_dir / "suite-snapshot"
         suite = read_json(suite_dir / "suite.json")
@@ -928,7 +942,7 @@ def command_run_resume(argv: list[str], run_id: str, json_mode: bool, started: f
     require_runner_acknowledgment(parsed)
     run_dir = Path("evals") / "runs" / run_id
     if not run_dir.exists():
-        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_id}", "resume an existing incomplete run id", 1)
+        raise run_not_found_error(run_id, "resume an existing incomplete run id")
     nothing_pending_warning = {"code": "W_RESUME_NOTHING_PENDING", "message": "run has no pending cases to resume"}
     if (run_dir / "manifest.json").exists():
         data = report_data(run_dir)
@@ -1031,7 +1045,7 @@ def command_jobs(argv: list[str], json_mode: bool, started: float) -> int:
             raise EvalctlError("E_CASE_INVALID", "jobs get requires a run id", "try: evalctl jobs get <run-id> --json", 1)
         run_dir = root / args[2]
         if not run_dir.exists():
-            raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {args[2]}", "try: evalctl jobs list --json", 1)
+            raise run_not_found_error(args[2])
         data = classify_run_dir(run_dir)
         return print_envelope(data, json_mode=json_mode, human=f"{data['run_id']}: {data['state']}", started=started)
     if subcommand == "prune":
@@ -1071,7 +1085,7 @@ def parse_replay_source(argv: list[str]) -> Path:
         raise EvalctlError("E_CASE_INVALID", "replay requires a source run id or --run-dir", "try: evalctl replay --failed <run-id> --json", 1)
     path = Path(run_dir) if run_dir else Path("evals") / "runs" / positional[0]
     if not (path / "manifest.json").exists():
-        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {path}", "try: evalctl run code-review --json", 1)
+        raise run_not_found_error(path.name)
     return path
 
 
@@ -1134,6 +1148,20 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
     return 6 if triggered else 0
 
 
+def available_run_ids() -> list[str]:
+    root = runs_root()
+    return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
+
+
+def run_not_found_error(run_id: str, hint: str = "try: evalctl jobs list --json") -> EvalctlError:
+    valid = available_run_ids()
+    ctx: dict[str, Any] = {"valid_values": valid}
+    suggestion = nearest(run_id, set(valid)) if valid else None
+    if suggestion:
+        ctx["did_you_mean"] = suggestion
+    return EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_id}", hint, 1, **ctx)
+
+
 def run_dir_from_argv(argv: list[str]) -> Path:
     spec = COMMAND_SPECS["report"] if argv and argv[0] == "report" else COMMAND_SPECS["status"]
     parsed = parse_command_args(argv, spec)
@@ -1154,7 +1182,7 @@ def command_status(argv: list[str], json_mode: bool, started: float) -> int:
     # A run "exists" for status the same way it does for `jobs get`: the run
     # directory is present. E_RUN_NOT_FOUND is reserved for ids with no run dir.
     if not run_dir.exists():
-        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_dir}", "try: evalctl run code-review --json", 1)
+        raise run_not_found_error(run_dir.name)
     classification = classify_run_dir(run_dir)
     if (run_dir / "manifest.json").exists():
         report = report_data(run_dir)
@@ -1179,7 +1207,7 @@ def command_report(argv: list[str], json_mode: bool, started: float) -> int:
         raise EvalctlError("E_CASE_INVALID", "report accepts at most one run positional", "try: evalctl report <run-id> --format json", 1)
     run_dir = run_dir_from_argv(argv)
     if not run_dir.exists():
-        raise EvalctlError("E_RUN_NOT_FOUND", f"run not found: {run_dir}", "try: evalctl run code-review --json", 1)
+        raise run_not_found_error(run_dir.name)
     if not (run_dir / "manifest.json").exists():
         # The run directory exists but has not finalized, so there is no
         # deterministic report yet. Name the in-flight state instead of

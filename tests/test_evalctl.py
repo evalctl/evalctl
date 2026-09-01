@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:7ca5b5f1b6fb62ef69c03928f47018f7b42073d9522613f963d5f3bc518f8244")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:10f6799303a2a76de42b6dbb00e166b01a78580ad2fe30c9f9072e69f64b5b36")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -2093,6 +2093,51 @@ class EvalctlCliTests(unittest.TestCase):
             self.envelope(["scorer", "add", "stdin-demo", "--name", "exact", "--required", "--json"], cwd)
             stdin_run = self.envelope(["run", "stdin-demo", "--run-id", "stdin-q", "--queue", "spoolctl", "--json"], cwd, extra_env=queue_env)
             self.assertTrue(stdin_run["data"]["run"]["ok"])
+
+    def test_not_found_errors_name_valid_sets_and_schema_uses_unknown_command(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+
+            # F20: schema on an unknown verb is E_UNKNOWN_COMMAND carrying the
+            # verb names it already holds, with a near-match suggestion.
+            bad_schema = self.run_cli(["schema", "ruh", "--json"], cwd, expect=1)
+            schema_err = json.loads(bad_schema.stdout)["errors"][0]
+            self.assertEqual(schema_err["code"], "E_UNKNOWN_COMMAND")
+            self.assertIn("run", schema_err["valid_values"])
+            self.assertEqual(schema_err["did_you_mean"], "run")
+            self.assertEqual(schema_err["corrected_command"], "evalctl schema run")
+
+            # F7: suite-not-found names the suites on disk.
+            bad_suite = self.run_cli(["validate", "kode-review", "--json"], cwd, expect=1)
+            suite_err = json.loads(bad_suite.stdout)["errors"][0]
+            self.assertEqual(suite_err["code"], "E_SUITE_NOT_FOUND")
+            self.assertEqual(suite_err["valid_values"], ["code-review"])
+            self.assertEqual(suite_err["did_you_mean"], "code-review")
+
+            # F7: run-not-found names the runs on disk.
+            self.envelope(["run", "code-review", "--run-id", "realrun", "--json"], cwd)
+            bad_run = self.run_cli(["status", "reelrun", "--json"], cwd, expect=1)
+            run_err = json.loads(bad_run.stdout)["errors"][0]
+            self.assertEqual(run_err["code"], "E_RUN_NOT_FOUND")
+            self.assertIn("realrun", run_err["valid_values"])
+            self.assertEqual(run_err["did_you_mean"], "realrun")
+
+    def test_init_reports_unwritable_directory_at_declared_exit(self) -> None:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            os.chmod(cwd, 0o555)
+            try:
+                # F17: an unwritable target is a declared tool-environment error
+                # at exit 3, not an undeclared internal error.
+                result = self.run_cli(["init", "--json"], cwd, expect=3)
+                err = json.loads(result.stdout)["errors"][0]
+                self.assertEqual(err["code"], "E_INIT_UNWRITABLE")
+                self.assertEqual(err["exit_code"], 3)
+            finally:
+                os.chmod(cwd, 0o755)
 
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
