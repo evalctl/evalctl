@@ -39,6 +39,33 @@
       "plan": {
         "additionalProperties": true,
         "properties": {
+          "blocked_by_external": {
+            "additionalProperties": true,
+            "properties": {
+              "clears_when": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "recommended_command": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "run_id",
+              "reason",
+              "recommended_command"
+            ],
+            "type": "object"
+          },
           "cases": {
             "items": {
               "type": "object"
@@ -83,7 +110,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:1a71ef66f11e8dbc3895f21cdf60d516e17a1cb7d59576fb84bb938367bb82da",
+    "data_hash": "sha256:9fdf2004178e59ce0095f1d1601388af1d2a4995e2cb4dad67dfa6e8fee8e911",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

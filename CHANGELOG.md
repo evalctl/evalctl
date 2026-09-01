@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`plan` reports a live reservation as an external blocker instead of
+  proposing work that would be refused.** With a live reservation held on the
+  target run, `plan` (and `plan --resume`) marked the run blocked but proposed
+  the `run`/`run --resume` command that `E_RUN_BUSY` would then reject, and the
+  payload carried no branchable blocker. The payload now carries
+  `data.blocked_by_external` -- populated only when a blocker exists -- naming
+  the reservation, when it clears, and the `status <run-id>` command to inspect
+  it; the affected cases are marked `blocked` and the recommended `commands`
+  point at the blocker, not at the refused run. With no reservation held, the
+  plan is unchanged.
 - **`status` and `report` now see a run while it is still in flight.** Both verbs
   keyed on `manifest.json`, which is written only at finalize, so mid-run they
   returned `E_RUN_NOT_FOUND` (exit `1`) for a run that `jobs get` reported as

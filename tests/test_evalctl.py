@@ -289,7 +289,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:6582f8cd37fd09b9ad29c9422da0e2418a5d5a6f9c2105e4dd14f149ef11e0e4")
             self.assertIn("doctor", doctor_schema["data"]["schemas"])
             plan_schema = self.envelope(["schema", "plan", "--json"], cwd)
-            self.assertEqual(plan_schema["meta"]["data_hash"], "sha256:1a71ef66f11e8dbc3895f21cdf60d516e17a1cb7d59576fb84bb938367bb82da")
+            self.assertEqual(plan_schema["meta"]["data_hash"], "sha256:9fdf2004178e59ce0095f1d1601388af1d2a4995e2cb4dad67dfa6e8fee8e911")
             self.assertIn("plan", plan_schema["data"]["schemas"])
             for verb in ("jobs", "replay", "suite", "case", "scorer", "doctor", "plan"):
                 single_schema = self.envelope(["schema", verb, "--json"], cwd)
@@ -1468,6 +1468,59 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual({case["action"] for case in queued["data"]["cases"]}, {"blocked"})
             self.assertIn("E_SPOOLCTL_UNAVAILABLE", {warning["code"] for warning in queued["warnings"]})
             self.assertFalse((cwd / "evals" / "runs" / "queued-plan").exists())
+
+    def test_plan_marks_a_live_reservation_as_an_external_blocker(self) -> None:
+        # F3: plan must not propose work a live reservation would refuse. With a
+        # live reservation held, plan marks the work blocked, carries a
+        # branchable blocked_by_external field, and recommends inspecting the
+        # blocker rather than the run command that would be refused. With the
+        # reservation released, the plan returns to its normal shape.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.write_resume_runner(cwd)
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env.update({"RUN_LOG": str(cwd / "runner.log"), "SLEEP_CASE": "cr-pass"})
+            proc = subprocess.Popen(
+                CMD + ["run", "code-review", "--run-id", "held", "--jobs", "1", "--reservation-ttl", "1", "--json"],
+                cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            run_dir = cwd / "evals" / "runs" / "held"
+            first_marker = run_dir / "cases" / "cr-fail" / "state.json"
+            try:
+                deadline = time.time() + 10
+                while time.time() < deadline and not first_marker.exists():
+                    time.sleep(0.05)
+                self.assertTrue(first_marker.exists(), "first case never reached terminal marker")
+
+                # While the reservation is live, resuming or re-running the id
+                # would be refused, so the plan must say so as data.
+                blocked = self.envelope(["plan", "--resume", "held", "--json"], cwd)
+                self.assertEqual(blocked["data"]["run"]["mode"], "blocked")
+                blocked_actions = {c["id"]: c["action"] for c in blocked["data"]["cases"]}
+                self.assertEqual(blocked_actions["cr-pass"], "blocked")
+                blocker = blocked["data"]["blocked_by_external"]
+                self.assertEqual(blocker["kind"], "reservation")
+                self.assertEqual(blocker["run_id"], "held")
+                cmds = [c["command"] for c in blocked["commands"]]
+                self.assertIn("evalctl status held --json", cmds)
+                self.assertNotIn("evalctl run --resume held --json", cmds)
+            finally:
+                proc.terminate()
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate(timeout=5)
+
+            # Reservation released (proc dead, ttl=1): plan returns to normal and
+            # carries no blocker field.
+            time.sleep(1.2)
+            released = self.envelope(["plan", "--resume", "held", "--json"], cwd)
+            self.assertEqual(released["data"]["run"]["mode"], "resume")
+            self.assertNotIn("blocked_by_external", released["data"])
+            self.assertIn("evalctl run --resume held --json", [c["command"] for c in released["commands"]])
 
     def test_case_execution_phase_helpers_are_callable(self) -> None:
         with tempfile.TemporaryDirectory() as td:

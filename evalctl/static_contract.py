@@ -484,6 +484,7 @@ DATA_SCHEMAS = {
             "plan": {"type": "object"},
             "cases": {"type": "array", "items": {"type": "object"}},
             "warnings": {"type": "array", "items": {"type": "object"}},
+            "blocked_by_external": schema_object(["kind", "run_id", "reason", "recommended_command"], {"kind": {"type": "string"}, "run_id": {"type": "string"}, "reason": {"type": "string"}, "clears_when": {"type": "string"}, "recommended_command": {"type": "string"}}),
         },
     ),
     "run": schema_object(

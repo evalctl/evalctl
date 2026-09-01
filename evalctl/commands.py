@@ -632,6 +632,24 @@ def build_tracks(case_items: list[dict[str, Any]], jobs: int) -> list[dict[str, 
     return tracks
 
 
+def live_reservation_blocker(run_dir: Path | None) -> dict[str, Any] | None:
+    # An external blocker belongs in the plan as data, not as an absence: a plan
+    # that names the live reservation and how to clear it is more useful than one
+    # that proposes a command `run`/`resume` will refuse with E_RUN_BUSY.
+    if run_dir is None:
+        return None
+    reservation = read_reservation(run_dir)
+    if not (reservation and reservation_is_live(reservation)):
+        return None
+    return {
+        "kind": "reservation",
+        "run_id": run_dir.name,
+        "reason": "a live reservation holds this run",
+        "clears_when": "the holding run finishes or its reservation TTL lapses",
+        "recommended_command": f"evalctl status {run_dir.name} --json",
+    }
+
+
 def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
     parsed = parse_command_args(argv, COMMAND_SPECS["plan"])
     args = list(parsed.positionals)
@@ -649,6 +667,7 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
     timeout_override = parsed_value(parsed, "--timeout")
     warnings: list[dict[str, Any]] = []
     commands: list[dict[str, str]] = []
+    blocked_by_external: dict[str, Any] | None = None
 
     completed_entries: dict[str, dict[str, Any]] = {}
     if resume_id is not None:
@@ -671,7 +690,17 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
             for case in cases
         ]
         suite_name = suite.get("name", suite_dir.name)
-        commands.append({"command": f"evalctl run --resume {shlex.quote(resume_id)} --json", "rationale": "Resume pending cases."})
+        blocked_by_external = live_reservation_blocker(run_dir)
+        if blocked_by_external is not None and run_mode == "resume":
+            run_mode = "blocked"
+            for item in case_items:
+                if item["action"] == "run":
+                    item["action"] = "blocked"
+                    item["reason"] = "a live reservation holds this run"
+            warnings.append({"code": "W_PLAN_BLOCKED", "message": "run reservation is live"})
+            commands.append({"command": blocked_by_external["recommended_command"], "rationale": "Inspect the live reservation blocking this run."})
+        else:
+            commands.append({"command": f"evalctl run --resume {shlex.quote(resume_id)} --json", "rationale": "Resume pending cases."})
     else:
         if len(args) != 2:
             raise EvalctlError("E_SUITE_NOT_FOUND", "plan requires a suite name", "try: evalctl plan code-review --json", 1)
@@ -694,10 +723,11 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
                     warnings.append({"code": "W_PLAN_BLOCKED", "message": "run id is already completed for a different suite or case set"})
                     commands.append({"command": "evalctl doctor --json", "rationale": "Inspect run conflict state."})
             else:
-                reservation = read_reservation(run_dir)
+                blocked_by_external = live_reservation_blocker(run_dir)
                 run_mode = "blocked"
-                if reservation and reservation_is_live(reservation):
+                if blocked_by_external is not None:
                     warnings.append({"code": "W_PLAN_BLOCKED", "message": "run reservation is live"})
+                    commands.append({"command": blocked_by_external["recommended_command"], "rationale": "Inspect the live reservation blocking this run."})
                 else:
                     warnings.append({"code": "W_PLAN_BLOCKED", "message": "run is incomplete and may be resumable"})
                     commands.append({"command": f"evalctl run --resume {shlex.quote(run_id)} --json", "rationale": "Resume incomplete run."})
@@ -752,6 +782,8 @@ def command_plan(argv: list[str], json_mode: bool, started: float) -> int:
         "cases": case_items,
         "warnings": warnings,
     }
+    if blocked_by_external is not None:
+        data["blocked_by_external"] = blocked_by_external
     return print_envelope(data, json_mode=json_mode, human=f"plan {suite_name}: {will_run} run, {will_skip} skip, {blocked} blocked", warnings=warnings, commands=commands, started=started)
 
 
