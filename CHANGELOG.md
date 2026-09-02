@@ -39,6 +39,18 @@
   now reports `requested_mode`, `actual_mode`, `available`, and `degraded`, so the
   degradation is detectable from meta structure instead of warning text. The pair
   is omitted entirely when no capture was requested.
+- **`case add --stdin` bulk-adds cases from piped `cases.jsonl`-shaped
+  records.** Single-add takes one case per process; seeding a suite meant one
+  fork per case. `--stdin` reads whole records (one JSON object per line, fields
+  `id`/`task`/`workspace`/`diff`/`expect`), so a suite's `cases.jsonl` pipes
+  straight into a fresh suite. The report is per-record --
+  `data.added`/`skipped`/`rejected` with `counts` -- because a bulk add is not
+  transactional across records: an exact-duplicate record is skipped, an
+  id-conflict or a malformed/invalid record is rejected with a per-line reason,
+  and every accepted record lands in one atomic append. Any rejection raises the
+  new `W_CASE_ADD_REJECTED` warning and exits `1`; `--stdin` does not combine
+  with the single-record flags (`--task`/`--workspace`/`--id`/`--diff`/
+  `--expect-json`).
 - **`plan` reports a live reservation as an external blocker instead of
   proposing work that would be refused.** With a live reservation held on the
   target run, `plan` (and `plan --resume`) marked the run blocked but proposed

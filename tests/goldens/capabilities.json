@@ -19,7 +19,8 @@
         "surface": "envelope",
         "where": [
           "validate",
-          "run"
+          "run",
+          "case"
         ]
       },
       "E_INFERCTL_INCOMPATIBLE": {
@@ -240,6 +241,13 @@
           "replay"
         ]
       },
+      "W_CASE_ADD_REJECTED": {
+        "class": "warning",
+        "surface": "envelope",
+        "where": [
+          "case"
+        ]
+      },
       "W_INFERCTL_ABSENT": {
         "class": "warning",
         "surface": "envelope",
@@ -432,7 +440,7 @@
           "add",
           "suite"
         ],
-        "description": "Author cases, including case add.",
+        "description": "Author cases, including case add. Pass --stdin to add many cases at once, one JSON object per line in cases.jsonl shape.",
         "exit_codes": [
           0,
           1,
@@ -440,6 +448,7 @@
         ],
         "flags": [
           "--json",
+          "--stdin",
           "--task",
           "--workspace",
           "--id",
@@ -714,7 +723,7 @@
   "errors": [],
   "meta": {
     "contract_version": "1.0",
-    "data_hash": "sha256:2543b78ad3b22be278a3a095d9e04fe5d5adf091d010263d425693cae41bb3a7",
+    "data_hash": "sha256:73ea0290b5fae6e9c4b655bc903238457599a48daa539e1b95f21916c3deac21",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

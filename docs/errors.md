@@ -91,6 +91,7 @@ Warnings never fail a command; they annotate the envelope.
 | `W_TEXT_DIFF_APPROXIMATED` | a text diff was approximated |
 | `W_OUTPUT_TRUNCATED` | runner output exceeded the byte cap |
 | `W_PATH_UNREADABLE` | a workspace path was skipped (e.g. non-UTF-8) |
+| `W_CASE_ADD_REJECTED` | `case add --stdin` rejected one or more piped records |
 | `W_INFERCTL_ABSENT` | `--inferctl-task` requested, but inferctl is not installed |
 | `W_INFERCTL_INCOMPATIBLE` | installed inferctl failed the version/contract check |
 | `W_INFERCTL_PREFLIGHT_BLOCKED` | inferctl preflight refused the run |

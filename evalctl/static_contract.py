@@ -40,7 +40,7 @@ EXIT_CODES = {
 }
 
 CODE_REGISTRY = {
-    "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run"], "retryable": False, "surface": "envelope"},
+    "E_CASE_INVALID": {"class": "user-input", "exit": 1, "where": ["validate", "run", "case"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_COMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch", "schema"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_SUBCOMMAND": {"class": "user-input", "exit": 1, "where": ["dispatch"], "retryable": False, "surface": "envelope"},
     "E_UNKNOWN_FLAG": {"class": "user-input", "exit": 1, "where": ["run", "replay", "jobs", "plan", "doctor"], "retryable": False, "surface": "envelope"},
@@ -77,6 +77,7 @@ CODE_REGISTRY = {
     "W_INFERCTL_INCOMPATIBLE": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
     "W_INFERCTL_CAPTURE_FAILED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
     "W_INFERCTL_PREFLIGHT_BLOCKED": {"class": "warning", "where": ["run", "resume"], "surface": "envelope"},
+    "W_CASE_ADD_REJECTED": {"class": "warning", "where": ["case"], "surface": "envelope"},
 }
 
 ACK_UNSANDBOXED_ENV = "EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER"
@@ -203,7 +204,7 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
     "jobs": CommandSpec("jobs", "Inspect and prune local run/reservation/queue state.", args=("list", "get", "prune"), subcommands=frozenset({"list", "get", "prune"}), flags={"--json": BOOL, "--yes": BOOL, "--force": BOOL, "--limit": positive_int_spec(maximum=MAX_JOBS_LIST_LIMIT), "--cursor": FlagSpec("text")}, mutates=True),
     "replay": CommandSpec("replay", "Re-execute failed/errored cases from a source run into a linked partial run. Without --run-id the destination id is derived from the source run and the replayed case set, not the clock, so a retry is idempotent: it returns the existing run rather than spawning a second one or colliding.", args=("run-id",), flags={"--json": BOOL, "--failed": BOOL, "--run-dir": FlagSpec("run_path"), "--suite": FlagSpec("suite_path"), "--run-id": FlagSpec("safe_id"), "--force": BOOL, "--jobs": positive_int_spec(), "--timeout": positive_int_spec(), "--fail-on-fail": BOOL, "--acknowledge-unsandboxed-runner": BOOL}, mutates=True, exit_codes=(0, 1, 2, 3, 4, 5, 6)),
     "suite": CommandSpec("suite", "Author suites, including suite add.", args=("add", "name"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--runner-argv": FlagSpec("text"), "--runner-command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL}, mutates=True, exit_codes=(0, 1, 5)),
-    "case": CommandSpec("case", "Author cases, including case add.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
+    "case": CommandSpec("case", "Author cases, including case add. Pass --stdin to add many cases at once, one JSON object per line in cases.jsonl shape.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--stdin": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
     "scorer": CommandSpec("scorer", "Author scorers, including built-in and command scorers.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--name": FlagSpec("enum", choices=frozenset(set(BUILTIN_SCORERS) | {"command"})), "--required": BOOL, "--advisory": BOOL, "--id": FlagSpec("safe_id"), "--argv": FlagSpec("text"), "--command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL, "--timeout": positive_int_spec()}, mutates=True, exit_codes=(0, 1, 5)),
     "status": CommandSpec("status", "Diagnose run state.", args=("run-id",), flags={"--json": BOOL, "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}),
     "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}, exit_codes=(0, 1, 3, 4)),
@@ -569,12 +570,19 @@ DATA_SCHEMAS = {
         },
     ),
     "case": schema_object(
-        ["suite", "id", "created", "case"],
+        ["suite"],
         {
             "suite": {"type": "string"},
+            # Single add mode: one record.
             "id": {"type": "string"},
             "created": {"type": "boolean"},
             "case": {"type": "object"},
+            # Bulk (--stdin) mode: per-record outcomes. `added`/`skipped`/
+            # `rejected` are disjoint; every input line lands in exactly one.
+            "added": {"type": "array", "items": {"type": "object"}},
+            "skipped": {"type": "array", "items": {"type": "object"}},
+            "rejected": {"type": "array", "items": schema_object(["line", "reason", "message"], {"line": {"type": "integer"}, "id": {"type": ["string", "null"]}, "reason": {"type": "string"}, "message": {"type": "string"}})},
+            "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
         },
     ),
     "scorer": schema_object(

@@ -65,7 +65,20 @@
       "case": {
         "additionalProperties": true,
         "properties": {
+          "added": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "case": {
+            "type": "object"
+          },
+          "counts": {
+            "additionalProperties": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "type": "object"
           },
           "created": {
@@ -74,15 +87,47 @@
           "id": {
             "type": "string"
           },
+          "rejected": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "line",
+                "reason",
+                "message"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "suite": {
             "type": "string"
           }
         },
         "required": [
-          "suite",
-          "id",
-          "created",
-          "case"
+          "suite"
         ],
         "type": "object"
       }
@@ -91,7 +136,7 @@
   "errors": [],
   "meta": {
     "contract_version": "1.0",
-    "data_hash": "sha256:735f9cb23ab85466b2fcecd14c06abdaab129e778f18284b56171368a81a02fb",
+    "data_hash": "sha256:57795ea160d64ee4ce09c2f6c7737fdaf320b1d5f38caf2e5ee1a1dfedc5374a",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

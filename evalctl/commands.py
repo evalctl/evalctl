@@ -77,6 +77,7 @@ from .runner import (
     execute_spoolctl_pending_cases,
 )
 from .suite import (
+    case_add_bulk_data,
     case_add_data,
     init_project,
     is_safe_id,
@@ -582,6 +583,16 @@ def command_case_add(argv: list[str], json_mode: bool, started: float) -> int:
     args = list(parsed.positionals)
     if len(args) != 3 or args[1] != "add":
         raise EvalctlError("E_CASE_INVALID", "case command requires: case add <suite>", "try: evalctl case add demo --task \"do X\" --workspace fixtures/x --json", 1)
+    if parsed_bool(parsed, "--stdin"):
+        conflicting = [flag for flag in ("--task", "--workspace", "--id", "--diff", "--expect-json") if flag in parsed.values]
+        if conflicting:
+            raise EvalctlError("E_CASE_INVALID", f"--stdin reads whole records; it does not combine with {', '.join(conflicting)}", "pipe cases.jsonl-shaped records on stdin, or drop --stdin", 1)
+        lines = sys.stdin.read().splitlines()
+        data, warnings = case_add_bulk_data(args[2], lines)
+        counts = data["counts"]
+        human = f"case add {data['suite']}: {counts['added']} added, {counts['skipped']} skipped, {counts['rejected']} rejected"
+        print_envelope(data, json_mode=json_mode, human=human, warnings=warnings, started=started)
+        return 1 if data["rejected"] else 0
     task = parsed_value(parsed, "--task")
     workspace = parsed_value(parsed, "--workspace")
     if task is None:

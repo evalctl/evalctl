@@ -196,10 +196,14 @@ def suite_add_data(name: str, runner: dict[str, Any], *, _validator: Any = valid
     return {"suite": name, "suite_dir": str(dest), "created": True, "files": [str(dest / "suite.json"), str(dest / "cases.jsonl"), str(dest / "fixtures")]}
 
 
-def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: str | None = None,
-                  diff_raw: str | None = None, expect_raw: str | dict[str, Any] | None = None) -> dict[str, Any]:
-    suite_dir = resolve_suite(suite_name)
-    suite = read_json(suite_dir / "suite.json")
+def build_case_record(suite_dir: Path, task: str, workspace_raw: str, *, case_id: str | None = None,
+                      diff_raw: str | None = None, expect_raw: str | dict[str, Any] | None = None) -> dict[str, Any]:
+    """Validate and normalize one case into its canonical `cases.jsonl` shape.
+
+    Pure with respect to the suite file: it reads fixtures to check they exist
+    but never writes. `case_add_data` and the bulk path both build through here
+    so a single record and a piped record are validated identically.
+    """
     workspace = normalize_suite_rel(workspace_raw, field="--workspace")
     if not (suite_dir / workspace).exists():
         raise EvalctlError("E_CASE_INVALID", f"workspace missing: {workspace}", "create the fixture before adding the case", 1)
@@ -224,6 +228,15 @@ def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: st
     if not is_safe_id(final_id):
         raise EvalctlError("E_CASE_INVALID", f"invalid case id: {final_id}", "use a path-safe id", 1)
     case["id"] = final_id
+    return case
+
+
+def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: str | None = None,
+                  diff_raw: str | None = None, expect_raw: str | dict[str, Any] | None = None) -> dict[str, Any]:
+    suite_dir = resolve_suite(suite_name)
+    suite = read_json(suite_dir / "suite.json")
+    case = build_case_record(suite_dir, task, workspace_raw, case_id=case_id, diff_raw=diff_raw, expect_raw=expect_raw)
+    final_id = case["id"]
     cases_path = suite_dir / suite.get("cases", "cases.jsonl")
     existing_cases = load_cases(cases_path)
     for existing in existing_cases:
@@ -243,6 +256,90 @@ def case_add_data(suite_name: str, task: str, workspace_raw: str, *, case_id: st
         _atomic_write(cases_path, old_text)
         raise
     return {"suite": suite.get("name", suite_dir.name), "id": final_id, "created": True, "case": case}
+
+
+# Fields a piped case record may carry, in `cases.jsonl` shape.
+_BULK_CASE_FIELDS = {"id", "task", "workspace", "diff", "expect"}
+
+
+def case_add_bulk_data(suite_name: str, lines: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Add many cases from stdin, one JSON object per line in `cases.jsonl` shape.
+
+    Bulk creation is not transactional by nature, so the result reports
+    per-record outcomes: `added`, `skipped` (an identical record already
+    exists), and `rejected` (each named with its line, id, and reason). All
+    accepted records are appended in one atomic write and the suite is validated
+    once; a validation failure rolls the whole batch back. Returns the data
+    payload and the warnings list.
+    """
+    suite_dir = resolve_suite(suite_name)
+    suite = read_json(suite_dir / "suite.json")
+    suite_label = suite.get("name", suite_dir.name)
+    cases_path = suite_dir / suite.get("cases", "cases.jsonl")
+    by_id: dict[str, dict[str, Any]] = {c["id"]: c for c in load_cases(cases_path)}
+    added: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    new_records: list[dict[str, Any]] = []
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line:
+            continue  # blank lines (including a trailing newline) are ignored
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            rejected.append({"line": lineno, "id": None, "reason": "E_CASE_INVALID", "message": f"invalid JSON: {exc.msg}"})
+            continue
+        if not isinstance(record, dict):
+            rejected.append({"line": lineno, "id": None, "reason": "E_CASE_INVALID", "message": "each line must be a JSON object"})
+            continue
+        unknown = set(record) - _BULK_CASE_FIELDS
+        if unknown:
+            rejected.append({"line": lineno, "id": record.get("id"), "reason": "E_CASE_INVALID", "message": f"unknown case fields: {', '.join(sorted(unknown))}"})
+            continue
+        if not isinstance(record.get("task"), str) or not record.get("task"):
+            rejected.append({"line": lineno, "id": record.get("id"), "reason": "E_CASE_INVALID", "message": "record requires a non-empty string task"})
+            continue
+        if not isinstance(record.get("workspace"), str) or not record.get("workspace"):
+            rejected.append({"line": lineno, "id": record.get("id"), "reason": "E_CASE_INVALID", "message": "record requires a non-empty string workspace"})
+            continue
+        try:
+            case = build_case_record(suite_dir, record["task"], record["workspace"], case_id=record.get("id"), diff_raw=record.get("diff"), expect_raw=record.get("expect"))
+        except EvalctlError as exc:
+            rejected.append({"line": lineno, "id": record.get("id"), "reason": exc.error["code"], "message": exc.error["message"]})
+            continue
+        cid = case["id"]
+        prior = by_id.get(cid)
+        if prior is not None:
+            if stable_json(prior) == stable_json(case):
+                skipped.append({"id": cid})
+            else:
+                rejected.append({"line": lineno, "id": cid, "reason": "E_RUN_CONFLICT", "message": "case id already exists with different content"})
+            continue
+        by_id[cid] = case
+        new_records.append(case)
+        added.append({"id": cid})
+    if new_records:
+        old_text = cases_path.read_text()
+        new_text = old_text
+        if new_text and not new_text.endswith("\n"):
+            new_text += "\n"
+        new_text += "".join(stable_json(case) + "\n" for case in new_records)
+        _atomic_write(cases_path, new_text)
+        try:
+            validate_suite(suite_dir)
+        except Exception:
+            _atomic_write(cases_path, old_text)
+            raise
+    data = {
+        "suite": suite_label,
+        "added": added,
+        "skipped": skipped,
+        "rejected": rejected,
+        "counts": {"added": len(added), "skipped": len(skipped), "rejected": len(rejected), "total": len(added) + len(skipped) + len(rejected)},
+    }
+    warnings = [{"code": "W_CASE_ADD_REJECTED", "message": f"{len(rejected)} record(s) rejected; see rejected[] for the line and reason"}] if rejected else []
+    return data, warnings
 
 
 def scorer_key(config: dict[str, Any]) -> tuple[str, str]:

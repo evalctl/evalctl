@@ -41,18 +41,18 @@ def setUpModule() -> None:
 
 
 class EvalctlCliTests(unittest.TestCase):
-    def run_cli(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def run_cli(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None, stdin_text: str | None = None) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env.setdefault("EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER", "1")
         if extra_env:
             env.update(extra_env)
-        result = subprocess.run(CMD + args, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(CMD + args, cwd=cwd, env=env, text=True, input=stdin_text, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, expect, msg=f"stdout={result.stdout}\nstderr={result.stderr}")
         return result
 
-    def envelope(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None) -> dict:
-        result = self.run_cli(args, cwd, expect, extra_env=extra_env)
+    def envelope(self, args: list[str], cwd: Path, expect: int = 0, extra_env: dict[str, str] | None = None, stdin_text: str | None = None) -> dict:
+        result = self.run_cli(args, cwd, expect, extra_env=extra_env, stdin_text=stdin_text)
         return json.loads(result.stdout)
 
     def run_cli_with_controlling_tty(self, args: list[str], cwd: Path, expect: int = 0) -> str:
@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:2543b78ad3b22be278a3a095d9e04fe5d5adf091d010263d425693cae41bb3a7")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:73ea0290b5fae6e9c4b655bc903238457599a48daa539e1b95f21916c3deac21")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -2788,6 +2788,86 @@ class EvalctlCliTests(unittest.TestCase):
             self.envelope(["case", "add", "demo", "--id", "two", "--task", "two", "--workspace", "fixtures/two", "--json"], cwd)
             self.assertEqual(cases_path.read_text().splitlines()[0], first_line)
             self.assertEqual(len(cases_path.read_text().splitlines()), 2)
+
+    def _demo_suite_with_fixtures(self, cwd: Path, name: str, fixtures: tuple[str, ...]) -> Path:
+        self.envelope(["suite", "add", name, "--runner-argv", "python3 $EVALCTL_WORKSPACE/r.py", "--json"], cwd)
+        suite_dir = cwd / "evals" / "suites" / name
+        for fx in fixtures:
+            (suite_dir / "fixtures" / fx).mkdir(parents=True)
+        return suite_dir
+
+    def test_case_add_stdin_round_trips_a_case_file_into_a_fresh_suite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            src = self._demo_suite_with_fixtures(cwd, "src", ("a", "b"))
+            self.envelope(["case", "add", "src", "--id", "a", "--task", "task a", "--workspace", "fixtures/a", "--expect-json", '{"exact":"ok"}', "--json"], cwd)
+            self.envelope(["case", "add", "src", "--id", "b", "--task", "task b", "--workspace", "fixtures/b", "--json"], cwd)
+            src_cases = (src / "cases.jsonl").read_text()
+
+            self._demo_suite_with_fixtures(cwd, "dst", ("a", "b"))
+            result = self.envelope(["case", "add", "dst", "--stdin", "--json"], cwd, stdin_text=src_cases)
+            self.assertEqual(result["data"]["counts"], {"added": 2, "skipped": 0, "rejected": 0, "total": 2})
+            self.assertEqual({r["id"] for r in result["data"]["added"]}, {"a", "b"})
+            # The destination case set equals the source case set.
+            dst_cases = (cwd / "evals" / "suites" / "dst" / "cases.jsonl").read_text()
+            self.assertEqual(
+                sorted((json.loads(l) for l in dst_cases.splitlines() if l.strip()), key=lambda c: c["id"]),
+                sorted((json.loads(l) for l in src_cases.splitlines() if l.strip()), key=lambda c: c["id"]),
+            )
+
+    def test_case_add_stdin_reports_partial_failure_with_per_record_reasons(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            suite_dir = self._demo_suite_with_fixtures(cwd, "demo", ("x",))
+            # Seed one existing case so a piped duplicate and a piped id-conflict
+            # can both be exercised.
+            self.envelope(["case", "add", "demo", "--id", "keep", "--task", "keep me", "--workspace", "fixtures/x", "--json"], cwd)
+            before = (suite_dir / "cases.jsonl").read_text()
+
+            # A good new record, a malformed line, a missing-field line, an exact
+            # duplicate (skip), an id-conflict (reject), and a trailing newline.
+            piped = (
+                '{"id":"fresh","task":"a new case","workspace":"fixtures/x"}\n'
+                'not json at all\n'
+                '{"workspace":"fixtures/x"}\n'
+                '{"id":"keep","task":"keep me","workspace":"fixtures/x"}\n'
+                '{"id":"keep","task":"changed body","workspace":"fixtures/x"}\n'
+                '\n'
+            )
+            result = self.envelope(["case", "add", "demo", "--stdin", "--json"], cwd, expect=1, stdin_text=piped)
+            data = result["data"]
+            self.assertEqual(data["counts"], {"added": 1, "skipped": 1, "rejected": 3, "total": 5})
+            self.assertEqual([r["id"] for r in data["added"]], ["fresh"])
+            self.assertEqual([r["id"] for r in data["skipped"]], ["keep"])
+            reasons = {r["line"]: r["reason"] for r in data["rejected"]}
+            self.assertEqual(reasons, {2: "E_CASE_INVALID", 3: "E_CASE_INVALID", 5: "E_RUN_CONFLICT"})
+            # A partial failure carries a warning, not an envelope-level error.
+            self.assertEqual(result["errors"], [])
+            self.assertIn("W_CASE_ADD_REJECTED", {w["code"] for w in result["warnings"]})
+            # Exactly one new line was appended; the seed line is untouched.
+            after = (suite_dir / "cases.jsonl").read_text()
+            self.assertTrue(after.startswith(before))
+            self.assertEqual(len(after.splitlines()), 2)
+
+    def test_case_add_stdin_empty_input_is_a_clean_no_op(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            suite_dir = self._demo_suite_with_fixtures(cwd, "demo", ())
+            before = (suite_dir / "cases.jsonl").read_text()
+            for empty in ("", "\n", "   \n\n"):
+                result = self.envelope(["case", "add", "demo", "--stdin", "--json"], cwd, stdin_text=empty)
+                self.assertEqual(result["data"]["counts"], {"added": 0, "skipped": 0, "rejected": 0, "total": 0})
+                self.assertEqual(result["warnings"], [])
+            self.assertEqual((suite_dir / "cases.jsonl").read_text(), before)
+
+    def test_case_add_stdin_rejects_conflicting_single_record_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self._demo_suite_with_fixtures(cwd, "demo", ("x",))
+            result = self.run_cli(["case", "add", "demo", "--stdin", "--task", "do X", "--workspace", "fixtures/x", "--json"], cwd, expect=1, stdin_text="")
+            error = json.loads(result.stdout)["errors"][0]
+            self.assertEqual(error["code"], "E_CASE_INVALID")
+            self.assertIn("--stdin", error["message"])
 
     def test_scorer_add_appends_builtin_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as td:
