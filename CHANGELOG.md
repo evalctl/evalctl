@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.4.5 - 2026-09-02
+
+Closes the v0.4.3 make-cli conformance sweep: six findings, all agent-facing
+contract shape. **One breaking change** -- `contract_version` becomes a dotted
+`MAJOR.MINOR` string (`"1.0"`), not the integer `1` -- landed now, before 1.0,
+because changing the type is itself breaking and cheapest to pay pre-1.0.
+Everything else is additive: `doctor` and `status` payload shape, a
+`run`/`replay` `meta.inferctl` degradation pair, `case add --stdin` bulk import,
+and `init --force` deletion reporting. Command names, envelope shape, error
+codes, exit codes, case statuses, and report projection are otherwise unchanged;
+report hashes are unaffected.
+
 - **BREAKING: `contract_version` is now a dotted `MAJOR.MINOR` string (`"1.0"`),
   not the integer `1`.** An integer had no minor channel: v0.2, v0.3, and v0.4
   were all additive yet all stuck at `1`, so an agent could not tell those
