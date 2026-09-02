@@ -232,7 +232,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:3f8c84e559c77bc1f669b6bfb3a3cdf6e03fe1243c0883dc46a895d7d491d7a4")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:2543b78ad3b22be278a3a095d9e04fe5d5adf091d010263d425693cae41bb3a7")
             self.assertEqual(caps["tool_version"], "0.4.4")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
@@ -306,6 +306,29 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertIn("--inferctl-task TASK", docs.stdout)
             self.assertIn("run --resume", docs.stdout)
             self.assertIn("--queue spoolctl", docs.stdout)
+
+    def test_contract_version_is_a_dotted_string_matching_capabilities(self) -> None:
+        # The field that tells a consumer what the contract is must itself agree
+        # with the type capabilities publishes for it. F21: an integer had no
+        # minor channel; the field is now a dotted MAJOR.MINOR string.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            env = {"PATH": "/nonexistent"}
+            caps = self.envelope(["capabilities", "--json"], cwd, extra_env=env)
+            # The capabilities schema declares the type; the value must match it.
+            cap_schema = self.envelope(["schema", "capabilities", "--json"], cwd, extra_env=env)
+            field_schema = cap_schema["data"]["schemas"]["capabilities"]["properties"]["contract_version"]
+            self.assertEqual(field_schema["type"], "string")
+            value = caps["data"]["contract_version"]
+            self.assertIsInstance(value, str)
+            self.assertRegex(value, r"^\d+\.\d+$")
+            # Same value and type flows through meta on every envelope.
+            self.assertEqual(caps["meta"]["contract_version"], value)
+            self.assertIsInstance(caps["meta"]["contract_version"], str)
+            # A consumer can split it into integer parts for comparison.
+            major, minor = (int(part) for part in value.split("."))
+            self.assertGreaterEqual(major, 1)
+            self.assertGreaterEqual(minor, 0)
 
     def test_every_json_verb_has_a_pinned_schema_golden(self) -> None:
         # Every verb that emits a JSON data payload has a data schema, and every

@@ -1,7 +1,7 @@
 {
   "commands": [],
   "data": {
-    "contract_version": 1,
+    "contract_version": "1.0",
     "env_vars": {
       "EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER": "set truthy (1/true/yes/on) to let run/replay execute suite runner and scorer commands; without it (and without --acknowledge-unsandboxed-runner) run/replay refuse with exit 2",
       "EVALCTL_CASE_FILE": "materialized case JSON passed to runner",
@@ -713,8 +713,8 @@
   },
   "errors": [],
   "meta": {
-    "contract_version": 1,
-    "data_hash": "sha256:3f8c84e559c77bc1f669b6bfb3a3cdf6e03fe1243c0883dc46a895d7d491d7a4",
+    "contract_version": "1.0",
+    "data_hash": "sha256:2543b78ad3b22be278a3a095d9e04fe5d5adf091d010263d425693cae41bb3a7",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

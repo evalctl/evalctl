@@ -121,7 +121,7 @@
   },
   "errors": [],
   "meta": {
-    "contract_version": 1,
+    "contract_version": "1.0",
     "data_hash": "sha256:1a4336e28be06330270691a30c97846be21a45dcd8f4dc3906a6443b5d3c2b24",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",

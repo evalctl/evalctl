@@ -66,7 +66,8 @@
         "additionalProperties": true,
         "properties": {
           "contract_version": {
-            "type": "integer"
+            "pattern": "^\\d+\\.\\d+$",
+            "type": "string"
           },
           "env_vars": {
             "additionalProperties": {
@@ -168,8 +169,8 @@
   },
   "errors": [],
   "meta": {
-    "contract_version": 1,
-    "data_hash": "sha256:88ef574d6fe3bf836fccfbb245a8f519ef5dce08c088db2b3fb61c9f82e2c83e",
+    "contract_version": "1.0",
+    "data_hash": "sha256:b247136f25caedf7c01b347d16d691174e7b059a77f8967adffbbdeca8cb0d58",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

@@ -13,7 +13,12 @@ from typing import Any, Callable, Literal, Mapping
 from . import __version__
 from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_VERSION
 
-CONTRACT_VERSION = 1
+# Dotted MAJOR.MINOR string, not an integer: the reference compatibility idiom
+# splits this field on "." and an integer has no minor channel. MAJOR bumps on a
+# breaking change; MINOR bumps on a purely additive one, so an agent can gate on
+# `contract_version.split(".")` to tell additive contracts apart. See
+# docs/agent-guide.md for the compatibility rule.
+CONTRACT_VERSION = "1.0"
 TOOL = "evalctl"
 DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
 DEFAULT_RESERVATION_TTL_SECONDS = 3600
@@ -470,7 +475,7 @@ DATA_SCHEMAS = {
         ["tool_name", "contract_version", "features", "verbs", "global_flags", "exit_codes", "error_codes", "env_vars", "integrations", "schemas_uri", "robot_docs_uri"],
         {
             "tool_name": {"type": "string"},
-            "contract_version": {"type": "integer"},
+            "contract_version": {"type": "string", "pattern": r"^\d+\.\d+$"},
             "features": {"type": "array", "items": {"type": "string"}},
             "verbs": {"type": "object", "additionalProperties": {"type": "object"}},
             "global_flags": {"type": "object", "additionalProperties": {"type": "string"}},

@@ -22,6 +22,21 @@ evalctl schema run --json       # output schema for a verb
 Don't hard-code the surface. Read `capabilities` for the installed version and
 branch on what it reports.
 
+### Reading `contract_version`
+
+`meta.contract_version` (also `data.contract_version` in `capabilities`) is a
+dotted `MAJOR.MINOR` string, e.g. `"1.0"`. Split it on `.`:
+
+- **MAJOR** bumps on a breaking change. If the MAJOR you built against differs
+  from the one you observe, stop and re-read the contract.
+- **MINOR** bumps on a purely additive change (a new verb, flag, field, or error
+  code). A higher MINOR than you built against is safe: existing fields keep
+  their meaning; new ones may appear. Ignore fields you don't recognize.
+
+This is why the field is a string, not an integer: an integer has no minor
+channel, so additive contracts could not be told apart. Build the comparison as
+two integer parts, not a float — `"1.10"` is newer than `"1.2"`.
+
 ## The workflow
 
 1. Scaffold `evals/suites/code-review/` with `evalctl init`, **or** author a new

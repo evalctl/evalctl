@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **BREAKING: `contract_version` is now a dotted `MAJOR.MINOR` string (`"1.0"`),
+  not the integer `1`.** An integer had no minor channel: v0.2, v0.3, and v0.4
+  were all additive yet all stuck at `1`, so an agent could not tell those
+  contracts apart through the field that exists for exactly that purpose, and the
+  reference compatibility idiom (which splits the field on `.`) raised against an
+  integer. Decision: adopt the dotted string now, before 1.0, since changing the
+  type is itself breaking and cheapest to pay while pre-1.0 (the two rejected
+  options were a second additive-counter field, and documenting that additive
+  change is simply not signalled). Going forward MAJOR bumps on a breaking
+  change and MINOR bumps on a purely additive one. The field moves in both
+  `data.contract_version` (`capabilities`) and `meta.contract_version` (every
+  envelope); the `capabilities` schema now types it `string` with a
+  `^\d+\.\d+$` pattern; capabilities, all schemas, every golden, and the docs
+  move together. Consumers doing an integer comparison must switch to splitting
+  on `.` and comparing integer parts. See docs/agent-guide.md for the rule an
+  agent should read.
 - **`doctor.operation_outcome` now matches the DIAGNOSE reference shape, and
   `doctor` reports a re-check cadence.** The second key was `health_kind`
   (`all-clear`/`attention-needed`), which no reference field named; it is now
