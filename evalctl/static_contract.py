@@ -499,12 +499,13 @@ DATA_SCHEMAS = {
         {"suite": {"type": "string"}, "case_count": {"type": "integer", "minimum": 0}, "valid": {"type": "boolean"}},
     ),
     "doctor": schema_object(
-        ["operation_outcome", "components", "recommended_action", "fallbacks_active"],
+        ["operation_outcome", "components", "recommended_action", "fallbacks_active", "next_check_after_seconds"],
         {
-            "operation_outcome": schema_object(["kind", "health_kind"], {"kind": {"type": "string"}, "health_kind": {"type": "string"}}),
+            "operation_outcome": schema_object(["kind", "exit_code_kind"], {"kind": {"type": "string"}, "exit_code_kind": {"type": "string"}}),
             "components": {"type": "object", "additionalProperties": {"type": "object"}},
             "recommended_action": schema_object(["command", "rationale", "is_destructive", "alternatives"], {"command": {"type": "string"}, "rationale": {"type": "string"}, "is_destructive": {"type": "boolean"}, "alternatives": {"type": "array"}}),
             "fallbacks_active": {"type": "array", "items": {"type": "object"}},
+            "next_check_after_seconds": {"type": "integer", "minimum": 0},
         },
     ),
     "plan": schema_object(

@@ -196,9 +196,10 @@ def doctor_data(component_name: str | None, *, fast: bool) -> tuple[dict[str, An
     if component_name is None:
         commands.append({"command": "evalctl jobs list --limit 50 --json", "rationale": "Inspect local run state."})
     data = {
-        "operation_outcome": {"kind": outcome, "health_kind": "all-clear" if outcome == "healthy" else "attention-needed"},
+        "operation_outcome": {"kind": outcome, "exit_code_kind": "success"},
         "components": components,
         "recommended_action": recommended or action("evalctl jobs list --limit 50 --json", "Inspect local run state."),
         "fallbacks_active": [],
+        "next_check_after_seconds": 300 if outcome == "healthy" else 60,
     }
     return data, commands

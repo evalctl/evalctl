@@ -49,6 +49,7 @@ from .artifacts import (
 from .inferctl import (
     inferctl_binary,
     inferctl_capabilities,
+    inferctl_meta,
     inferctl_run_context,
     inferctl_verb_names,
 )
@@ -647,7 +648,7 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
                   jobs: int, timeout_override: int | None, replayed_from: str | None,
                   reservation_ttl: int = DEFAULT_RESERVATION_TTL_SECONDS,
                   queue_backend: str | None = None, slots: int | None = None,
-                  inferctl_task: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
+                  inferctl_task: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], bool, dict[str, Any]]:
     run_dir.mkdir(parents=True)
     shutil.copytree(suite_dir, run_dir / "suite-snapshot")
     queue = {"backend": "spoolctl", "db": ".spoolctl.db", "jobs": {}} if queue_backend == "spoolctl" else None
@@ -667,7 +668,7 @@ def execute_cases(suite_dir: Path, suite: dict[str, Any], cases: list[dict[str, 
             all_warnings.append({"code": "W_PARTIAL_RUN", "message": "some cases errored; report remains generable"})
         data, run_ok = finalize_run(run_dir, metadata, case_entries)
         clear_reservation(run_dir)
-    return data, dedupe_warnings(all_warnings), run_ok
+    return data, dedupe_warnings(all_warnings), run_ok, inferctl_meta(inferctl_context)
 
 
 def plan_case_entry(case: dict[str, Any], action_name: str, reason: str, suite: dict[str, Any], *, inferctl_task: str | None = None) -> dict[str, Any]:
@@ -927,10 +928,10 @@ def command_run(argv: list[str], json_mode: bool, started: float) -> int:
         if reservation and reservation_is_live(reservation):
             raise EvalctlError("E_RUN_BUSY", f"run reservation is live for {run_id}", "wait and retry evalctl run with a new --run-id", 4)
         raise EvalctlError("E_RUN_BUSY", f"run {run_id} is incomplete and may be resumable", f"retry with: evalctl run --resume {run_id} --json", 4)
-    data, all_warnings, run_ok = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots, inferctl_task)
+    data, all_warnings, run_ok, run_meta = execute_cases(suite_dir, suite, cases, run_dir, run_id, jobs, timeout_override, None, reservation_ttl, queue_backend, slots, inferctl_task)
     triggered = mark_fail_on_fail(parsed, data, run_ok)
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "regenerate deterministic JSON report"}]
-    print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
+    print_envelope(data, json_mode=json_mode, human=f"Run {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started, meta_extra=run_meta or None)
     if triggered:
         print(FAIL_ON_FAIL_STDERR, file=sys.stderr)
     return 6 if triggered else 0
@@ -1160,11 +1161,11 @@ def command_replay(argv: list[str], json_mode: bool, started: float) -> int:
                 raise EvalctlError("E_RUN_CONFLICT", f"run-id `{run_id}` already completed for a different case set; refusing to overwrite without --force", "use a fresh --run-id or pass --force", 5)
         else:
             raise EvalctlError("E_RUN_BUSY", f"run reservation exists for {run_id}", "wait and retry evalctl replay with a new --run-id", 4)
-    data, run_warnings, run_ok = execute_cases(suite_dir, suite, target_cases, run_dir, run_id, jobs, timeout_override, source_manifest["run_id"])
+    data, run_warnings, run_ok, run_meta = execute_cases(suite_dir, suite, target_cases, run_dir, run_id, jobs, timeout_override, source_manifest["run_id"])
     triggered = mark_fail_on_fail(parsed, data, run_ok)
     all_warnings = run_warnings + warnings
     commands = [{"command": f"evalctl report {run_id} --format json", "rationale": "inspect replay report"}]
-    print_envelope(data, json_mode=json_mode, human=f"Replay {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started)
+    print_envelope(data, json_mode=json_mode, human=f"Replay {run_id}: {'pass' if run_ok else 'fail'}", warnings=all_warnings, commands=commands, started=started, meta_extra=run_meta or None)
     if triggered:
         print(FAIL_ON_FAIL_STDERR, file=sys.stderr)
     return 6 if triggered else 0
@@ -1210,17 +1211,20 @@ def command_status(argv: list[str], json_mode: bool, started: float) -> int:
         report = report_data(run_dir)
         run_ref = classification["run_id"]
         case_page, page_meta, page_commands = paginate_cases(report["cases"], parsed, lambda lim, cur: f"evalctl status {shlex.quote(run_ref)} --limit {lim} --cursor {shlex.quote(cur)} --json")
-        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "run": report["run"], "cases": case_page, "progress": classification["cases"], "recommended_action": {"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "inspect deterministic report and ranked failures", "alternatives": []}}
+        recommended = {"command": f"evalctl report --run-dir {run_dir} --format json", "rationale": "inspect deterministic report and ranked failures", "alternatives": []}
+        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "run": report["run"], "cases": case_page, "progress": classification["cases"], "recommended_action": recommended}
+        commands = [{"command": recommended["command"], "rationale": recommended["rationale"]}] + page_commands
         human = f"{classification['run_id']}: {'pass' if report['run']['ok'] else 'fail'}"
-        return print_envelope(data, json_mode=json_mode, human=human, commands=page_commands, started=started, meta_extra=page_meta)
+        return print_envelope(data, json_mode=json_mode, human=human, commands=commands, started=started, meta_extra=page_meta)
     else:
         # In flight (or stale/orphaned): manifest.json is written only at
         # finalize, so report deterministic scoring is not yet available.
         # Report live state and per-case progress instead of failing.
         progress = classification["cases"]
-        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "progress": progress, "reservation": classification["reservation"], "queue_jobs": classification["queue_jobs"], "recommended_action": {"command": f"evalctl status {classification['run_id']} --json", "rationale": "re-check live progress until the run finalizes", "alternatives": []}}
+        recommended = {"command": f"evalctl status {classification['run_id']} --json", "rationale": "re-check live progress until the run finalizes", "alternatives": []}
+        data = {"run_id": classification["run_id"], "run_dir": str(run_dir), "state": classification["state"], "progress": progress, "reservation": classification["reservation"], "queue_jobs": classification["queue_jobs"], "recommended_action": recommended}
         human = f"{classification['run_id']}: {classification['state']} ({progress['terminal']}/{progress['case_count']} cases)"
-    return print_envelope(data, json_mode=json_mode, human=human, started=started)
+        return print_envelope(data, json_mode=json_mode, human=human, commands=[{"command": recommended["command"], "rationale": recommended["rationale"]}], started=started)
 
 
 def command_report(argv: list[str], json_mode: bool, started: float) -> int:

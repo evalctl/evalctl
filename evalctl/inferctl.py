@@ -80,6 +80,26 @@ def inferctl_run_context(task: str | None) -> tuple[dict[str, Any], list[dict[st
     }, warnings
 
 
+def inferctl_meta(context: dict[str, Any]) -> dict[str, Any]:
+    """Requested-vs-actual provenance pair for the run envelope's meta.
+
+    Empty when no capture was requested. When a task was requested, the pair
+    lets an agent detect a silent degradation (requested preflight, actual
+    none) without parsing warning text.
+    """
+    if not context.get("requested"):
+        return {}
+    actual = context.get("actual_mode", "none")
+    return {
+        "inferctl": {
+            "requested_mode": "preflight",
+            "actual_mode": actual,
+            "available": bool(context.get("available", False)),
+            "degraded": actual != "preflight",
+        }
+    }
+
+
 def inferctl_payload_data(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None

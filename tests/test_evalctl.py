@@ -286,7 +286,7 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertIn("required", verb_schema)
                 self.assertTrue(verb_schema["additionalProperties"])
             doctor_schema = self.envelope(["schema", "doctor", "--json"], cwd)
-            self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:08c2d17ff5d14c58b8ede3c893e2a3a0eb230205ee6c1e2d81fba72a1b6616e3")
+            self.assertEqual(doctor_schema["meta"]["data_hash"], "sha256:b2cbb9d7fa1b67e71f744b5a0a2b90001b955cc7d327eb0af39d332563d888e2")
             self.assertIn("doctor", doctor_schema["data"]["schemas"])
             plan_schema = self.envelope(["schema", "plan", "--json"], cwd)
             self.assertEqual(plan_schema["meta"]["data_hash"], "sha256:9f2d8a9a5ab140c1b427cf2f528c6b63aeb3e91f00deb5757d2c3e3c2c8ffb32")
@@ -916,6 +916,35 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(json.loads((incompatible_run / "manifest.json").read_text())["provenance"]["inferctl"]["actual_mode"], "none")
             self.assertFalse(list(incompatible_run.glob("cases/*/inferctl-*")))
 
+    def test_run_meta_carries_inferctl_requested_vs_actual_pair(self) -> None:
+        # A silent degradation (requested preflight, delivered none) must be
+        # detectable from meta structure, not by parsing warning text.
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+
+            # No capture requested: no inferctl meta noise.
+            plain = self.envelope(["run", "code-review", "--run-id", "plain", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertNotIn("inferctl", plain["meta"])
+
+            # Requested but absent: meta records the requested-vs-actual pair.
+            degraded = self.envelope(["run", "code-review", "--run-id", "degraded", "--inferctl-task", "code", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            meta = degraded["meta"]["inferctl"]
+            self.assertEqual(meta["requested_mode"], "preflight")
+            self.assertEqual(meta["actual_mode"], "none")
+            self.assertFalse(meta["available"])
+            self.assertTrue(meta["degraded"])
+
+            # Delivered: same pair reports parity, degraded False.
+            bindir = install_fake_inferctl(cwd)
+            env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", "")}
+            delivered = self.envelope(["run", "code-review", "--run-id", "delivered", "--inferctl-task", "code", "--json"], cwd, extra_env=env)
+            meta = delivered["meta"]["inferctl"]
+            self.assertEqual(meta["requested_mode"], "preflight")
+            self.assertEqual(meta["actual_mode"], "preflight")
+            self.assertTrue(meta["available"])
+            self.assertFalse(meta["degraded"])
+
     def test_inferctl_preflight_blocked_fallback_and_capture_failure_modes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
@@ -1108,6 +1137,9 @@ class EvalctlCliTests(unittest.TestCase):
                 self.assertEqual(status["data"]["progress"]["case_count"], 2)
                 self.assertEqual(status["data"]["progress"]["terminal"], 1)
                 self.assertEqual(status["data"]["progress"]["pending"], 1)
+                # In-flight status surfaces its recommended re-check as a
+                # paste-ready command, not only in data.recommended_action.
+                self.assertIn(status["data"]["recommended_action"]["command"], {c["command"] for c in status["commands"]})
 
                 # (b) report names the in-flight state; it must not be
                 # E_RUN_NOT_FOUND, and it points the caller at status.
@@ -1132,6 +1164,18 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual({e["code"] for e in status_absent["errors"]}, {"E_RUN_NOT_FOUND"})
             report_absent = self.envelope(["report", "no-such", "--format", "json"], cwd, expect=1)
             self.assertEqual({e["code"] for e in report_absent["errors"]}, {"E_RUN_NOT_FOUND"})
+
+    def test_status_surfaces_recommended_action_as_a_paste_ready_command(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "done", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            status = self.envelope(["status", "done", "--json"], cwd)
+            recommended = status["data"]["recommended_action"]["command"]
+            self.assertTrue(recommended)
+            # recommended_action stays in data (an addition, not a move) and is
+            # also emitted in commands[] so an agent can run it without reshaping.
+            self.assertIn(recommended, {c["command"] for c in status["commands"]})
 
     def test_resume_reuses_terminal_cases_and_cleans_partial_case(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1419,6 +1463,30 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(initialized["data"]["components"]["spoolctl"]["state"], "not_configured")
             self.assertEqual(initialized["data"]["components"]["inferctl"]["state"], "not_configured")
             self.assertIn("evalctl jobs list --limit 50 --json", {command["command"] for command in initialized["commands"]})
+
+    def test_doctor_operation_outcome_matches_diagnose_reference_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            healthy = self.envelope(["doctor", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            outcome = healthy["data"]["operation_outcome"]
+            self.assertEqual(set(outcome), {"kind", "exit_code_kind"})
+            self.assertNotIn("health_kind", outcome)
+            self.assertEqual(outcome["kind"], "healthy")
+            self.assertEqual(outcome["exit_code_kind"], "success")
+            self.assertEqual(healthy["data"]["next_check_after_seconds"], 300)
+
+            stale = cwd / "evals" / "runs" / "stale"
+            stale.mkdir(parents=True)
+            artifacts.write_json(stale / ".reservation.json", {
+                "run_id": "stale", "pid": 123, "host": "test",
+                "started_ts": "1970-01-01T00:00:00Z", "heartbeat_ts": "1970-01-01T00:00:00Z", "ttl_seconds": 1,
+            })
+            degraded = self.envelope(["doctor", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
+            self.assertEqual(degraded["data"]["operation_outcome"]["kind"], "degraded")
+            # exit_code_kind stays "success": doctor reports state, it never fails its own exit.
+            self.assertEqual(degraded["data"]["operation_outcome"]["exit_code_kind"], "success")
+            self.assertEqual(degraded["data"]["next_check_after_seconds"], 60)
 
     def test_doctor_reports_stale_reservations_and_scoped_components(self) -> None:
         with tempfile.TemporaryDirectory() as td:

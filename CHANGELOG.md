@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **`doctor.operation_outcome` now matches the DIAGNOSE reference shape, and
+  `doctor` reports a re-check cadence.** The second key was `health_kind`
+  (`all-clear`/`attention-needed`), which no reference field named; it is now
+  `exit_code_kind`. `kind` still carries the health outcome
+  (`healthy`/`degraded`/`unhealthy`) while `exit_code_kind` reports the exit-code
+  family the command returns (always `success`: `doctor` reports state, it never
+  fails its own exit). A new `data.next_check_after_seconds` (`300` when healthy,
+  `60` otherwise) tells an agent when to poll again.
+- **`status` surfaces its recommended action as a paste-ready `command`.** Both
+  the completed and in-flight branches carried `data.recommended_action` but left
+  `commands[]` without it (completed carried only pagination links; in-flight
+  carried none). The recommended command now appears in `commands[]` as well, so
+  an agent can run it without reshaping the payload. `recommended_action` stays in
+  `data` -- this is an addition, not a move.
+- **`run`/`replay` meta now carries an inferctl requested-vs-actual pair when a
+  capture was requested.** When `--inferctl-task` asked for preflight capture but
+  inferctl was absent or incompatible, only a `W_INFERCTL_ABSENT`/
+  `W_INFERCTL_INCOMPATIBLE` warning marked the silent degradation. `meta.inferctl`
+  now reports `requested_mode`, `actual_mode`, `available`, and `degraded`, so the
+  degradation is detectable from meta structure instead of warning text. The pair
+  is omitted entirely when no capture was requested.
 - **`plan` reports a live reservation as an external blocker instead of
   proposing work that would be refused.** With a live reservation held on the
   target run, `plan` (and `plan --resume`) marked the run blocked but proposed

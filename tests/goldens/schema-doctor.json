@@ -77,10 +77,14 @@
             },
             "type": "array"
           },
+          "next_check_after_seconds": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "operation_outcome": {
             "additionalProperties": true,
             "properties": {
-              "health_kind": {
+              "exit_code_kind": {
                 "type": "string"
               },
               "kind": {
@@ -89,7 +93,7 @@
             },
             "required": [
               "kind",
-              "health_kind"
+              "exit_code_kind"
             ],
             "type": "object"
           },
@@ -122,7 +126,8 @@
           "operation_outcome",
           "components",
           "recommended_action",
-          "fallbacks_active"
+          "fallbacks_active",
+          "next_check_after_seconds"
         ],
         "type": "object"
       }
@@ -131,7 +136,7 @@
   "errors": [],
   "meta": {
     "contract_version": 1,
-    "data_hash": "sha256:08c2d17ff5d14c58b8ede3c893e2a3a0eb230205ee6c1e2d81fba72a1b6616e3",
+    "data_hash": "sha256:b2cbb9d7fa1b67e71f744b5a0a2b90001b955cc7d327eb0af39d332563d888e2",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"
