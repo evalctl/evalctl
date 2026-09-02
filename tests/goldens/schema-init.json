@@ -74,6 +74,19 @@
             },
             "type": "array"
           },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removed_truncated": {
+            "type": "boolean"
+          },
           "suite": {
             "type": "string"
           }
@@ -81,7 +94,10 @@
         "required": [
           "created",
           "suite",
-          "files"
+          "files",
+          "removed",
+          "removed_count",
+          "removed_truncated"
         ],
         "type": "object"
       }
@@ -90,7 +106,7 @@
   "errors": [],
   "meta": {
     "contract_version": "1.0",
-    "data_hash": "sha256:ab3435916a9ea0bb8d0751dda7a4a45886fa7323c628934bf8888eb7249c0fe8",
+    "data_hash": "sha256:6185fa7a330a32f056e486334faa7268287d3f00f111c347461a5a1a47133324",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

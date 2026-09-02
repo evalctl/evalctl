@@ -51,6 +51,16 @@
   new `W_CASE_ADD_REJECTED` warning and exits `1`; `--stdin` does not combine
   with the single-record flags (`--task`/`--workspace`/`--id`/`--diff`/
   `--expect-json`).
+- **`init --force` now reports the files it deletes.** `--force` removes the
+  existing sample suite to make room, but the envelope described only what was
+  created and was silent about what was removed -- a destructive flag that
+  under-reports its own effect. `init` data now carries `removed` (the deleted
+  paths, capped at a bounded sample), `removed_count` (the true total), and
+  `removed_truncated`. A plain `init` reports an empty `removed`; it still
+  refuses with `E_RUN_CONFLICT` when `evals/` exists and deletes nothing. Swept
+  the other mutating verbs in the same pass: `jobs prune` already reports its
+  removals precisely, and `replay --force` overwrites the exact `run_id` the
+  caller named and reports that id.
 - **`plan` reports a live reservation as an external blocker instead of
   proposing work that would be refused.** With a live reservation held on the
   target run, `plan` (and `plan --resume`) marked the run blocked but proposed

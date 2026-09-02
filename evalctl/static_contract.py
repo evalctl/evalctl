@@ -497,8 +497,15 @@ DATA_SCHEMAS = {
         },
     ),
     "init": schema_object(
-        ["created", "suite", "files"],
-        {"created": {"type": "string"}, "suite": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}}},
+        ["created", "suite", "files", "removed", "removed_count", "removed_truncated"],
+        {
+            "created": {"type": "string"},
+            "suite": {"type": "string"},
+            "files": {"type": "array", "items": {"type": "string"}},
+            "removed": {"type": "array", "items": {"type": "string"}},
+            "removed_count": {"type": "integer", "minimum": 0},
+            "removed_truncated": {"type": "boolean"},
+        },
     ),
     "validate": schema_object(
         ["suite", "case_count", "valid"],

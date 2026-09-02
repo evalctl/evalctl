@@ -13,6 +13,10 @@ from .static_contract import BUILTIN_SCORERS, EvalctlError, SAFE_ID_RE, sha256_t
 
 VALID_SCORER_NAMES = frozenset(set(BUILTIN_SCORERS) | {"command"})
 
+# init --force lists the files it deletes. A pathological suite could hold
+# thousands; cap the listed sample and let removed_count carry the true total.
+INIT_REMOVED_SAMPLE_CAP = 100
+
 
 def available_suites() -> list[str]:
     root = Path("evals") / "suites"
@@ -99,7 +103,12 @@ def init_project(force: bool = False) -> dict[str, Any]:
     if root.exists() and not force:
         raise EvalctlError("E_RUN_CONFLICT", "evals/ already exists; refusing to overwrite", "try: evalctl validate code-review --json, or evalctl init --force to replace sample files", 5)
     suite = root / "suites" / "code-review"
+    removed: list[str] = []
     if force and suite.exists():
+        # --force replaces the sample suite. Enumerate every file it deletes
+        # before removing them, so the envelope records what was there -- a
+        # destructive flag must not under-report its own effect.
+        removed = sorted(p.as_posix() for p in suite.rglob("*") if p.is_file())
         shutil.rmtree(suite)
     (suite / "fixtures" / "cr-pass").mkdir(parents=True, exist_ok=True)
     (suite / "fixtures" / "cr-fail").mkdir(parents=True, exist_ok=True)
@@ -140,7 +149,15 @@ def init_project(force: bool = False) -> dict[str, Any]:
         (case_dir / "src" / "app.py").write_text(body)
         (case_dir / "change.diff").write_text(diff)
         (case_dir / "runner.py").write_text(runner)
-    return {"created": str(root), "suite": "code-review", "files": ["evals/suites/code-review/suite.json", "evals/suites/code-review/cases.jsonl"]}
+    removed_sample = removed[:INIT_REMOVED_SAMPLE_CAP]
+    return {
+        "created": str(root),
+        "suite": "code-review",
+        "files": ["evals/suites/code-review/suite.json", "evals/suites/code-review/cases.jsonl"],
+        "removed": removed_sample,
+        "removed_count": len(removed),
+        "removed_truncated": len(removed) > len(removed_sample),
+    }
 
 
 def is_safe_id(value: str) -> bool:

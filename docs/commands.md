@@ -22,7 +22,7 @@ version is always `evalctl capabilities --json`; this page is the human summary.
 
 | Command | Purpose |
 | --- | --- |
-| `init [--force]` | Scaffold `evals/` with a sample code-review suite |
+| `init [--force]` | Scaffold `evals/` with a sample code-review suite (`--force` replaces an existing sample suite and reports the files it deletes) |
 | `suite add <name>` | Add a suite (`--runner-argv ARGV` or `--runner-command CMD --shell`) |
 | `case add <suite>` | Add a case (`--task`, `--workspace`, `--id`, `--diff`, `--expect-json`), or bulk-add with `--stdin` |
 | `scorer add <suite>` | Add a scorer (`--name`, `--required`/`--advisory`, command scorers via `--argv`) |

@@ -2304,6 +2304,49 @@ class EvalctlCliTests(unittest.TestCase):
             finally:
                 os.chmod(cwd, 0o755)
 
+    def test_init_force_reports_the_files_it_deletes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            # A first init reports nothing removed -- there was nothing there.
+            first = self.envelope(["init", "--json"], cwd)
+            self.assertEqual(first["data"]["removed"], [])
+            self.assertEqual(first["data"]["removed_count"], 0)
+            self.assertFalse(first["data"]["removed_truncated"])
+
+            # Drop a file the sample suite does not create, so the deletion set
+            # is not just the scaffold's own files.
+            suite_dir = cwd / "evals" / "suites" / "code-review"
+            (suite_dir / "custom.txt").write_text("keep me?\n")
+            before = {p.relative_to(cwd).as_posix() for p in suite_dir.rglob("*") if p.is_file()}
+
+            forced = self.envelope(["init", "--force", "--json"], cwd)
+            data = forced["data"]
+            # The reported deletions match the filesystem difference exactly:
+            # every file that existed under the suite is named, custom.txt
+            # included, and nothing else.
+            self.assertEqual(set(data["removed"]), before)
+            self.assertEqual(data["removed_count"], len(before))
+            self.assertIn("evals/suites/code-review/custom.txt", data["removed"])
+            self.assertFalse(data["removed_truncated"])
+            # The custom file is gone -- --force really replaced the tree.
+            self.assertFalse((suite_dir / "custom.txt").exists())
+
+    def test_init_without_force_refuses_and_deletes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            suite_dir = cwd / "evals" / "suites" / "code-review"
+            (suite_dir / "custom.txt").write_text("keep me\n")
+            before = {p.relative_to(cwd).as_posix() for p in suite_dir.rglob("*") if p.is_file()}
+
+            refused = self.run_cli(["init", "--json"], cwd, expect=5)
+            err = json.loads(refused.stdout)["errors"][0]
+            self.assertEqual(err["code"], "E_RUN_CONFLICT")
+            # Nothing was removed: the refusal is total, not partial.
+            after = {p.relative_to(cwd).as_posix() for p in suite_dir.rglob("*") if p.is_file()}
+            self.assertEqual(after, before)
+            self.assertTrue((suite_dir / "custom.txt").exists())
+
     def test_cli_input_grammar_and_error_channels(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
