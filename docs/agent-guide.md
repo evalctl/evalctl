@@ -7,10 +7,10 @@ order: 4
 
 # Driving evalctl from an agent
 
-evalctl is agent-first: every mutating verb speaks a `--json` envelope, exit
-codes are a stable branching contract, and the run directory is a portable
-artifact another agent can inspect without your shell history. The tool ships
-its own handbook — `evalctl robot-docs guide` — and this page mirrors it.
+Every mutating verb speaks a `--json` envelope, exit codes are a stable
+branching contract, and the run directory is a portable artifact another agent
+can inspect without your shell history. The tool ships its own handbook —
+`evalctl robot-docs guide` — and this page mirrors it.
 
 ## Discover the contract first
 

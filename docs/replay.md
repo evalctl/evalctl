@@ -7,9 +7,9 @@ order: 2
 
 # Replay and portable artifacts
 
-There are two distinct "replay" ideas in evalctl, and they are worth keeping
-separate: **execution replay** (re-run the failed cases) and **artifact replay**
-(re-score a copied run directory without re-running anything).
+evalctl has two distinct "replay" ideas: **execution replay** (re-run the failed
+cases) and **artifact replay** (re-score a copied run directory without
+re-running anything).
 
 ## Execution replay
 

@@ -46,13 +46,22 @@ evalctl is agent-shaped.
 
 ## Status
 
-Python pre-release. v0.4 provides scaffold, validate, doctor, plan, bounded
-parallel run execution, durable run metadata, crash resume, bounded local jobs
-inspection, optional spoolctl queueing, optional inferctl preflight provenance,
-status, report, deterministic local scorers, CLI authoring verbs, execution
-replay for failed cases, command scorers, truthful warnings/errors, real schema
-output, and artifact replay from a copied run directory.
-`contract_version` remains `1`.
+Python pre-release. The standalone synchronous path is complete and needs no
+external service. v0.4 provides:
+
+- **Authoring** — scaffold (`init`), `validate`, and CLI verbs to build suites.
+- **Running** — bounded-parallel run execution, side-effect-free `plan`, crash
+  resume, and `doctor` runtime diagnostics.
+- **Results** — durable run metadata, `status`, `report`, deterministic local
+  scorers, command scorers, and bounded local jobs inspection.
+- **Replay** — execution replay for failed cases, and artifact replay from a
+  copied run directory.
+- **Contract** — truthful warnings and errors, real schema output, and a
+  machine-readable `capabilities` surface.
+- **Optional integrations** — spoolctl queueing and inferctl preflight
+  provenance.
+
+`contract_version` is `1.0`.
 
 ## Install
 

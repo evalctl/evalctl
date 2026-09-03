@@ -7,10 +7,9 @@ order: 3
 
 # Security posture
 
-Be direct about the threat model: **evalctl is not a sandbox.** Runners and
-command scorers are arbitrary local commands that evalctl executes on your
-machine with your privileges. Treat a suite the way you'd treat any script you're
-about to run.
+**evalctl is not a sandbox.** Runners and command scorers are arbitrary local
+commands that evalctl executes on your machine with your privileges. Treat a
+suite the way you'd treat any script you're about to run.
 
 ## The acknowledgment gate
 
