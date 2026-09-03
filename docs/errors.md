@@ -97,10 +97,11 @@ Warnings never fail a command; they annotate the envelope.
 | `W_INFERCTL_PREFLIGHT_BLOCKED` | inferctl preflight refused the run |
 | `W_INFERCTL_CAPTURE_FAILED` | inferctl route/provenance capture failed |
 
-The `E_INFERCTL_*` and `W_INFERCTL_*` codes only arise around the **planned**
-inferctl integration, requested with `run`/`plan --inferctl-task`. inferctl is
-not yet available (`capabilities --json` reports it as `planned`), so today the
-request degrades to `W_INFERCTL_ABSENT` rather than capturing route provenance.
+The `E_INFERCTL_*` and `W_INFERCTL_*` codes arise around the optional inferctl
+preflight integration. `run --inferctl-task TASK` captures per-case preflight
+provenance when inferctl is compatible. `plan --inferctl-task TASK` records the
+requested provenance in the plan. If inferctl is absent or incompatible, the
+run continues with a degradation warning.
 
 ## Common cases
 

@@ -50,9 +50,10 @@ pass `--acknowledge-unsandboxed-runner` or set
 `E_UNSANDBOXED_RUNNER_UNACK` and exit `2` before any command runs. `plan` never
 executes runners, so it needs no acknowledgment.
 
-Both `run` and `plan` also accept `--inferctl-task TASK` for the **planned**
-inferctl integration; it is not yet available, so requesting it records a
-`W_INFERCTL_ABSENT` warning rather than capturing route provenance.
+`run --inferctl-task TASK` captures inferctl preflight provenance for each case
+before its runner starts. `plan --inferctl-task TASK` records the requested
+provenance in its side-effect-free plan. If inferctl is absent or incompatible,
+the run continues and records a degradation warning.
 
 ## Inspecting
 
