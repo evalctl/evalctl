@@ -383,6 +383,10 @@ class RealSpoolctlQueueTests(unittest.TestCase):
             env = os.environ.copy()
             env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             env["SLEEP_CASE"] = "cr-pass"
+            # This run is launched directly, bypassing the envelope() helper that
+            # normally supplies the acknowledgment, so the exit-2 runner-safety
+            # gate would refuse it before it ever creates the queue database.
+            env.setdefault("EVALCTL_ACKNOWLEDGE_UNSANDBOXED_RUNNER", "1")
             proc = subprocess.Popen(
                 CMD + ["run", "code-review", "--run-id", "real-resume", "--queue", "spoolctl",
                        "--reservation-ttl", "1", "--json"],
