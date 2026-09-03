@@ -28,9 +28,6 @@ and grades the resulting workspace with deterministic scorers. The core artifact
 is a portable run directory that another agent can inspect, report on, and
 re-score without access to the original shell history.
 
-Keywords: agent evals, LLM evaluation, AI agents, local-first, CLI, code review,
-workspace diff, deterministic scoring, artifact replay, eval harness.
-
 ## How it differs from promptfoo
 
 [promptfoo](https://www.promptfoo.dev/) is the incumbent local eval CLI, and it
@@ -216,3 +213,8 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 - Site: [evalctl.dev](https://evalctl.dev)
 - Repository: [github.com/evalctl/evalctl](https://github.com/evalctl/evalctl)
+
+---
+
+<sub>Keywords: agent evals, LLM evaluation, AI agents, local-first, CLI, code
+review, workspace diff, deterministic scoring, artifact replay, eval harness.</sub>

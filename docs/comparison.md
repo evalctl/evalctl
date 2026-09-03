@@ -16,7 +16,7 @@ workspace it leaves behind.
 | --- | --- | --- |
 | Unit under test | prompt → completion | agent run → files, diffs, command logs, artifacts |
 | Scoring surface | text of a response | resulting workspace: git diff, expected/forbidden file changes, exit codes, plus text |
-| Execution | in-process, synchronous | synchronous by default; `run --resume` resumes crashed runs; optional `--queue spoolctl` delegates runner execution |
+| Execution | in-process, synchronous | synchronous by default; `plan` previews actions, `doctor` diagnoses state, `run --resume` resumes crashed runs; optional `--queue spoolctl` delegates runner execution |
 | Model context | provider API keys | inferctl route/preflight provenance is deferred |
 
 ## The core difference

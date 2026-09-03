@@ -43,7 +43,7 @@ pip install -e .
 ## Verify
 
 ```bash
-evalctl --version   # 0.4.4
+evalctl --version   # 0.4.5
 evalctl capabilities --json
 ```
 

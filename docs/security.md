@@ -46,8 +46,8 @@ evalctl won't provide it for you.
   child and grandchild processes don't survive a `E_RUNNER_TIMEOUT`.
 - **Atomic artifact writes.** JSON artifacts are written to a same-directory temp
   file and moved into place with `os.replace`, so readers never see a
-  half-written file. (This is atomicity, not full crash-durability — v0.1.1 does
-  not fsync.)
+  half-written file. (This is atomicity, not full crash-durability — evalctl
+  does not fsync.)
 - **Output caps.** `EVALCTL_OUTPUT_FILE` raw bytes are capped, with a truthful
   `runner.json.output_truncated` flag and a `W_OUTPUT_TRUNCATED` warning.
 - **Robust serialization.** Non-UTF-8 workspace paths are skipped with
