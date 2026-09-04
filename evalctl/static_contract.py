@@ -207,7 +207,7 @@ COMMAND_SPECS: dict[str, CommandSpec] = {
     "case": CommandSpec("case", "Author cases, including case add. Pass --stdin to add many cases at once, one JSON object per line in cases.jsonl shape.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--stdin": BOOL, "--task": FlagSpec("text", allow_dash_value=True), "--workspace": FlagSpec("suite_path"), "--id": FlagSpec("safe_id"), "--diff": FlagSpec("suite_path"), "--expect-json": FlagSpec("json_text", allow_dash_value=True)}, mutates=True, exit_codes=(0, 1, 5)),
     "scorer": CommandSpec("scorer", "Author scorers, including built-in and command scorers.", args=("add", "suite"), subcommands=frozenset({"add"}), flags={"--json": BOOL, "--name": FlagSpec("enum", choices=frozenset(set(BUILTIN_SCORERS) | {"command"})), "--required": BOOL, "--advisory": BOOL, "--id": FlagSpec("safe_id"), "--argv": FlagSpec("text"), "--command": FlagSpec("text", allow_dash_value=True), "--shell": BOOL, "--timeout": positive_int_spec()}, mutates=True, exit_codes=(0, 1, 5)),
     "status": CommandSpec("status", "Diagnose run state.", args=("run-id",), flags={"--json": BOOL, "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}),
-    "report": CommandSpec("report", "Generate markdown or JSON report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json"}), default="markdown"), "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}, exit_codes=(0, 1, 3, 4)),
+    "report": CommandSpec("report", "Generate markdown, JSON, or JUnit report from run artifacts.", args=("run-id",), flags={"--json": BOOL, "--format": FlagSpec("enum", choices=frozenset({"markdown", "json", "junit"}), default="markdown"), "--run-dir": FlagSpec("run_path"), "--limit": positive_int_spec(maximum=MAX_CASE_PAGE_LIMIT), "--cursor": FlagSpec("text")}, exit_codes=(0, 1, 3, 4)),
 }
 
 VERB_NAMES = frozenset(COMMAND_SPECS)
@@ -298,7 +298,7 @@ COMMANDS:
   case add <suite> --task TEXT --workspace PATH [--id ID] [--diff PATH] [--expect-json JSON] [--json]
   scorer add <suite> --name NAME [--required|--advisory] [--id ID] [--argv ARGV|--command CMD --shell] [--json]
   status <run-id|--run-dir PATH> [--json]
-  report <run-id|--run-dir PATH> [--format markdown|json] [--json]
+  report <run-id|--run-dir PATH> [--format markdown|json|junit] [--json]
 
 GLOBAL FLAGS:
   --json           Structured envelope output

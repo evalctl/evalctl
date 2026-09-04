@@ -3628,6 +3628,16 @@ class EvalctlCliTests(unittest.TestCase):
             for case in cases:
                 self.assertEqual(set(case.attrib), {"name", "classname", "time"})
 
+    def test_report_junit_forces_raw_xml_and_rejects_json(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "junit-mode", "--json"], cwd)
+            result = self.run_cli(["report", "junit-mode", "--format", "junit"], cwd)
+            self.assertTrue(result.stdout.startswith('<?xml version="1.0" encoding="UTF-8"?>\n'))
+            rejected = self.run_cli(["report", "junit-mode", "--format", "junit", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(rejected.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")

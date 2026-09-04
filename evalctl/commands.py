@@ -88,7 +88,7 @@ from .suite import (
     validate_suite,
 )
 from .doctor import doctor_data
-from .reports import markdown_report, report_data
+from .reports import junit_report, markdown_report, report_data
 
 
 def finalize_run(run_dir: Path, metadata: dict[str, Any], case_entries: list[dict[str, Any]]) -> tuple[dict[str, Any], bool]:
@@ -100,6 +100,8 @@ def classify_run_dir(run_dir: Path) -> dict[str, Any]:
 
 
 def wants_json(argv: list[str]) -> bool:
+    if report_format_junit_requested(argv) and "--json" not in argv:
+        return False
     return "--json" in argv or not sys.stdout.isatty()
 
 
@@ -1253,6 +1255,11 @@ def command_report(argv: list[str], json_mode: bool, started: float) -> int:
         raise EvalctlError("E_RUN_IN_FLIGHT", f"run {run_dir.name} is {state}; the report is available after the run finalizes", f"try: evalctl status {run_dir.name} --json", 4)
     data = report_data(run_dir)
     fmt = parsed_value(parsed, "--format", "json" if json_mode else "markdown")
+    if fmt == "junit":
+        if has_flag(argv, "--json"):
+            raise EvalctlError("E_CASE_INVALID", "--json cannot be used with --format junit", "remove --json to receive raw JUnit XML", 1)
+        sys.stdout.buffer.write(junit_report(run_dir).encode("utf-8"))
+        return 0
     if fmt == "markdown" and not has_flag(argv, "--json"):
         print(markdown_report(data), end="")
         return 0
@@ -1273,6 +1280,17 @@ def report_format_json_requested(argv: list[str]) -> bool:
         if token == "--format" and index + 1 < len(argv):
             return argv[index + 1] == "json"
         if token == "--format=json":
+            return True
+    return False
+
+
+def report_format_junit_requested(argv: list[str]) -> bool:
+    if not argv or argv[0] != "report":
+        return False
+    for index, token in enumerate(argv):
+        if token == "--format" and index + 1 < len(argv):
+            return argv[index + 1] == "junit"
+        if token == "--format=junit":
             return True
     return False
 
