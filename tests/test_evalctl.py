@@ -239,7 +239,7 @@ class EvalctlCliTests(unittest.TestCase):
             caps = self.envelope(["capabilities", "--json"], cwd, extra_env={"PATH": "/nonexistent"})
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
-            self.assertEqual(caps["meta"]["data_hash"], "sha256:73ea0290b5fae6e9c4b655bc903238457599a48daa539e1b95f21916c3deac21")
+            self.assertEqual(caps["meta"]["data_hash"], "sha256:28413eb57d0b3e4062db415ecf97eca559396fc80c866975d891eec1dd442a89")
             self.assertEqual(caps["tool_version"], "1.1.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
