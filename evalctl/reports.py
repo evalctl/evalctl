@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import os
 from pathlib import Path
 from typing import Any
 
@@ -54,4 +56,40 @@ def markdown_report(data: dict[str, Any]) -> str:
         for score in failure["scores"]:
             if not score["ok"]:
                 lines.append(f"  - {score['scorer']}: {score['label']} {score['findings']}")
+    return "\n".join(lines) + "\n"
+
+
+def _xml_text(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _junit_seconds(duration_ms: object) -> str:
+    return f"{float(duration_ms or 0) / 1000:.3f}"
+
+
+def junit_report(run_dir: Path) -> str:
+    """Render the fixed 1.1 JUnit element and attribute set for one run."""
+    manifest_doc = read_json(run_dir / "manifest.json")
+    suite = read_json(run_dir / "suite-snapshot" / "suite.json")
+    suite_name = str(manifest_doc["suite"]["name"])
+    cases: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    for entry in sorted(manifest_doc["cases"], key=lambda case: os.fsencode(case["id"])):
+        score = recompute_case_score(run_dir, entry, suite)
+        runner = read_json(run_dir / "cases" / entry["id"] / "runner.json")
+        cases.append((entry, score, runner))
+    failures = sum(score["status"] == "fail" for _, score, _ in cases)
+    errors = sum(score["status"] == "error" for _, score, _ in cases)
+    total_seconds = sum(float(runner.get("duration_ms") or 0) / 1000 for _, _, runner in cases)
+    attrs = f'name="{_xml_text(suite_name)}" tests="{len(cases)}" failures="{failures}" errors="{errors}" time="{total_seconds:.3f}"'
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', f"<testsuites {attrs}>", f"  <testsuite {attrs}>"]
+    for entry, score, runner in cases:
+        case_attrs = f'name="{_xml_text(entry["id"])}" classname="{_xml_text(suite_name)}" time="{_junit_seconds(runner.get("duration_ms"))}"'
+        if score["status"] == "pass":
+            lines.append(f"    <testcase {case_attrs}/>")
+        elif score["status"] == "fail":
+            lines.append(f'    <testcase {case_attrs}><failure type="scorer-failure" message="scorer failure; see body"></failure></testcase>')
+        else:
+            error_type = "runner-error" if runner.get("timed_out") or runner.get("spawn_failed") else "scorer-error"
+            lines.append(f'    <testcase {case_attrs}><error type="{error_type}" message="case errored; see body"></error></testcase>')
+    lines.extend(["  </testsuite>", "</testsuites>"])
     return "\n".join(lines) + "\n"

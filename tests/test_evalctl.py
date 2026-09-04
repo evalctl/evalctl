@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 import tomllib
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from evalctl import runner
 from evalctl import suite as suite_module
 from evalctl import run_state
 from evalctl import scoring
+from evalctl import reports
 from evalctl.redaction import (VERDICT_MAX_NODES, VERDICT_MAX_SERIALIZED_BYTES,
                                VerdictLimitError, VerdictParseError,
                                parse_bounded_json)
@@ -3605,6 +3607,26 @@ class EvalctlCliTests(unittest.TestCase):
             replay = self.run_cli(["replay", "--failed", "source", "--run-id", "bad-pattern-replay", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(replay.stdout)["errors"][0]["code"], "E_CASE_INVALID")
             self.assertFalse((cwd / "evals" / "runs" / "bad-pattern-replay").exists())
+
+    def test_junit_renderer_uses_the_frozen_structure_and_case_order(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "junit", "--json"], cwd)
+            run_dir = cwd / "evals" / "runs" / "junit"
+            xml_bytes = reports.junit_report(run_dir).encode("utf-8")
+            self.assertTrue(xml_bytes.startswith(b'<?xml version="1.0" encoding="UTF-8"?>\n'))
+            self.assertNotIn(b"\r\n", xml_bytes)
+            root = ET.fromstring(xml_bytes)
+            self.assertEqual(root.tag, "testsuites")
+            self.assertEqual(set(root.attrib), {"name", "tests", "failures", "errors", "time"})
+            suite = root.find("testsuite")
+            self.assertIsNotNone(suite)
+            self.assertNotIn("skipped", suite.attrib)
+            cases = suite.findall("testcase")
+            self.assertEqual([case.attrib["name"] for case in cases], sorted((case.attrib["name"] for case in cases), key=os.fsencode))
+            for case in cases:
+                self.assertEqual(set(case.attrib), {"name", "classname", "time"})
 
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
