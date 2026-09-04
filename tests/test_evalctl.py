@@ -3637,6 +3637,11 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(result.stdout.startswith('<?xml version="1.0" encoding="UTF-8"?>\n'))
             rejected = self.run_cli(["report", "junit-mode", "--format", "junit", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(rejected.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            for flag, value in (("--limit", "1"), ("--cursor", "ignored")):
+                with self.subTest(flag=flag):
+                    rejected = self.run_cli(["report", "junit-mode", "--format", "junit", flag, value], cwd, expect=1)
+                    self.assertIn("cannot be used with --format junit", rejected.stderr)
+                    self.assertFalse(rejected.stdout.startswith("<?xml"))
 
     def test_raw_markdown_report_ignores_pagination_but_envelope_applies_it(self) -> None:
         with tempfile.TemporaryDirectory() as td:

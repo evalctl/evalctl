@@ -1258,6 +1258,8 @@ def command_report(argv: list[str], json_mode: bool, started: float) -> int:
     if fmt == "junit":
         if has_flag(argv, "--json"):
             raise EvalctlError("E_CASE_INVALID", "--json cannot be used with --format junit", "remove --json to receive raw JUnit XML", 1)
+        if has_flag(argv, "--limit") or has_flag(argv, "--cursor"):
+            raise EvalctlError("E_CASE_INVALID", "--limit and --cursor cannot be used with --format junit", "remove pagination flags to receive a complete JUnit XML report", 1)
         sys.stdout.buffer.write(junit_report(run_dir).encode("utf-8"))
         return 0
     if fmt == "markdown" and not has_flag(argv, "--json"):
