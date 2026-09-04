@@ -120,8 +120,12 @@ def _atomic_write(path: Path, text: str, *, _writer: Any | None = None) -> None:
             tmp_path.unlink()
 
 
-def write_json(path: Path, data: Any) -> None:
-    _atomic_write(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+def json_text(data: Any) -> str:
+    return json.dumps(data, indent=2, sort_keys=True) + "\n"
+
+
+def write_json(path: Path, data: Any, *, serialized: str | None = None) -> None:
+    _atomic_write(path, serialized if serialized is not None else json_text(data))
 
 
 def render_text_diff(diff: dict[str, Any]) -> str:

@@ -8,9 +8,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .artifacts import apply_redaction, read_json, write_json
+from .artifacts import apply_redaction, json_text, read_json, write_json
 from .processes import run_process
-from .redaction import redact_json
+from .redaction import (VERDICT_MAX_SERIALIZED_BYTES, VerdictLimitError,
+                        VerdictParseError, parse_bounded_json, redact_json)
 from .static_contract import BUILTIN_SCORERS, DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS, SAFE_ID_RE, sha256_text, stable_json
 
 
@@ -105,6 +106,29 @@ def scorer_failure(scorer: dict[str, Any], required: bool, why: str) -> dict[str
     return result
 
 
+def scorer_limit_failure(scorer: dict[str, Any], required: bool, limit: str) -> dict[str, Any]:
+    result = scorer_failure(scorer, required, f"verdict exceeded {limit} limit; see run artifacts")
+    result["verdict_truncated"] = True
+    return result
+
+
+def prepare_command_verdict(result: dict[str, Any], scorer: dict[str, Any], required: bool,
+                            patterns: list[str], env_values: list[str], max_bytes: int) -> tuple[dict[str, Any], str]:
+    result, verdict_redacted = redact_json(result, patterns, env_values, max_bytes)
+    result["diagnostics_redaction_version"] = 1
+    if verdict_redacted:
+        result["redacted"] = True
+    serialized = json_text(result)
+    if len(serialized.encode("utf-8")) > VERDICT_MAX_SERIALIZED_BYTES:
+        result = scorer_limit_failure(scorer, required, "serialized-size")
+        result, verdict_redacted = redact_json(result, patterns, env_values, max_bytes)
+        result["diagnostics_redaction_version"] = 1
+        if verdict_redacted:
+            result["redacted"] = True
+        serialized = json_text(result)
+    return result, serialized
+
+
 def normalize_command_verdict(raw: Any, scorer: dict[str, Any], required: bool) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return scorer_failure(scorer, required, "command scorer stdout must be one JSON object")
@@ -196,9 +220,11 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
         result = scorer_failure(scorer, required, f"command scorer exited {process_result.exit_code}")
     else:
         try:
-            raw = json.loads(stdout.strip())
-        except json.JSONDecodeError as exc:
-            result = scorer_failure(scorer, required, f"invalid command scorer JSON: {exc.msg}")
+            raw = parse_bounded_json(stdout.strip())
+        except VerdictLimitError as exc:
+            result = scorer_limit_failure(scorer, required, exc.limit)
+        except VerdictParseError as exc:
+            result = scorer_failure(scorer, required, f"invalid command scorer JSON: {exc}")
         else:
             result = normalize_command_verdict(raw, scorer, required)
     stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
@@ -209,11 +235,8 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
     stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
     (scorers_dir / f"{scorer_id}.stdout.txt").write_text(stdout)
     (scorers_dir / f"{scorer_id}.stderr.txt").write_text(stderr)
-    result, verdict_redacted = redact_json(result, patterns, env_values, max_bytes)
-    result["diagnostics_redaction_version"] = 1
-    if verdict_redacted:
-        result["redacted"] = True
-    write_json(verdict_path, result)
+    result, serialized = prepare_command_verdict(result, scorer, required, patterns, env_values, max_bytes)
+    write_json(verdict_path, result, serialized=serialized)
     return result
 
 

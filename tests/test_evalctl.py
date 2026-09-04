@@ -22,6 +22,10 @@ from evalctl import static_contract
 from evalctl import runner
 from evalctl import suite as suite_module
 from evalctl import run_state
+from evalctl import scoring
+from evalctl.redaction import (VERDICT_MAX_NODES, VERDICT_MAX_SERIALIZED_BYTES,
+                               VerdictLimitError, VerdictParseError,
+                               parse_bounded_json)
 from evalctl.static_contract import now_iso
 from evalctl.processes import run_process
 from tests.fakes import (REAL_SPOOLCTL_ATTEMPT_KEYS, REAL_SPOOLCTL_SHOW_KEYS, REAL_SPOOLCTL_TERMINAL_JOB_STATES,
@@ -3441,6 +3445,59 @@ class EvalctlCliTests(unittest.TestCase):
             runner_json = json.loads((case_dir / "runner.json").read_text())
             self.assertEqual(runner_json["diagnostics_redaction_version"], 1)
             self.assertTrue(runner_json["stderr_redacted"])
+
+    def test_command_verdict_token_limits_and_surrogates_precede_json_loads(self) -> None:
+        self.assertIsInstance(parse_bounded_json("[" * 31 + "0" + "]" * 31), list)
+        with self.assertRaisesRegex(VerdictLimitError, "depth"):
+            parse_bounded_json("[" * 32 + "0" + "]" * 32)
+        self.assertEqual(len(parse_bounded_json("[" + ",".join("0" for _ in range(VERDICT_MAX_NODES - 1)) + "]")), VERDICT_MAX_NODES - 1)
+        with self.assertRaisesRegex(VerdictLimitError, "node-count"):
+            parse_bounded_json("[" + ",".join("0" for _ in range(VERDICT_MAX_NODES)) + "]")
+        with self.assertRaises(VerdictParseError):
+            parse_bounded_json('{"\\ud800": "x"}')
+        with self.assertRaises(VerdictParseError):
+            parse_bounded_json('{"x": "\\ud800"}')
+
+    def test_command_verdict_limit_artifacts_are_safe_and_last_key_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "limited_scorer.py"
+            suite = self.load_suite(cwd)
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True,
+                                 "argv": [sys.executable, str(scorer_path)]}]
+            self.write_suite(cwd, suite)
+
+            scorer_path.write_text("print('[' * 64 + '0' + ']' * 64)\n")
+            self.envelope(["run", "code-review", "--run-id", "depth-limit", "--json"], cwd)
+            verdict_path = cwd / "evals" / "runs" / "depth-limit" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            verdict = json.loads(verdict_path.read_text())
+            self.assertTrue(verdict["verdict_truncated"])
+            self.assertEqual(verdict["findings"], [{"why": "verdict exceeded depth limit; see run artifacts"}])
+
+            scorer_path.write_text("print('{\\\"ok\\\":true,\\\"score\\\":1,\\\"label\\\":\\\"first\\\",\\\"label\\\":\\\"last\\\",\\\"findings\\\":[]}')\n")
+            self.envelope(["run", "code-review", "--run-id", "last-key", "--json"], cwd)
+            verdict_path = cwd / "evals" / "runs" / "last-key" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            self.assertEqual(json.loads(verdict_path.read_text())["label"], "last")
+
+    def test_command_verdict_checks_pretty_serialization_size(self) -> None:
+        scorer_doc = {"scorer": "command", "id": "judge", "ok": False, "score": 0.0,
+                      "label": "fail", "required": True, "findings": [], "error": True,
+                      "error_code": "E_SCORER_CASE_FAILED"}
+        for count in range(9_900, 8_000, -100):
+            scorer_doc["findings"] = [{f"key-{index:05d}": "x" * 95 for index in range(count)}]
+            compact = static_contract.stable_json(scorer_doc).encode("utf-8")
+            pretty = artifacts.json_text({**scorer_doc, "diagnostics_redaction_version": 1}).encode("utf-8")
+            if len(compact) < VERDICT_MAX_SERIALIZED_BYTES < len(pretty):
+                break
+        else:
+            self.fail("could not construct compact/pretty size boundary fixture")
+        verdict, serialized = scoring.prepare_command_verdict(
+            scorer_doc, {"name": "command", "id": "judge"}, True, [], [], VERDICT_MAX_SERIALIZED_BYTES
+        )
+        self.assertTrue(verdict["verdict_truncated"])
+        self.assertLess(len(serialized.encode("utf-8")), VERDICT_MAX_SERIALIZED_BYTES)
 
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
