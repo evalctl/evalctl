@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-09-03
+
+First stable machine-contract release. `contract_version` remains `1.0`.
+
+- Fixed capture-time redaction for command-scorer verdict text and synthetic runner
+  errors. New diagnostic artifacts record the redaction protocol version.
+- Bounded command-scorer capture and verdict parsing before graph creation.
+- Validated output budgets and redaction patterns before execution.
+- Corrected the robot-guide fsync wording.
+
 ## 0.4.5 - 2026-09-02
 
 Closes the v0.4.3 make-cli conformance sweep: six findings, all agent-facing

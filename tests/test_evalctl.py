@@ -237,7 +237,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
             self.assertEqual(caps["meta"]["data_hash"], "sha256:73ea0290b5fae6e9c4b655bc903238457599a48daa539e1b95f21916c3deac21")
-            self.assertEqual(caps["tool_version"], "0.4.5")
+            self.assertEqual(caps["tool_version"], "1.0.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
@@ -3201,6 +3201,7 @@ class EvalctlCliTests(unittest.TestCase):
             case_dir = cwd / "evals" / "runs" / "trunc-output" / "cases" / "cr-pass"
             runner_json = json.loads((case_dir / "runner.json").read_text())
             self.assertTrue(runner_json["output_truncated"])
+            self.assertEqual(runner_json["diagnostics_redaction_version"], 1)
             self.assertEqual((case_dir / "output.txt").read_bytes(), b"a" * 10)
 
             report = self.envelope(["report", "trunc-output", "--format", "json"], cwd)
