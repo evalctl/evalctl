@@ -5,6 +5,11 @@ import json
 import math
 import os
 import re
+import signal
+import subprocess
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +18,96 @@ from .processes import run_process
 from .redaction import (VERDICT_MAX_SERIALIZED_BYTES, VerdictLimitError,
                         VerdictParseError, parse_bounded_json, redact_json)
 from .static_contract import BUILTIN_SCORERS, DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS, SAFE_ID_RE, sha256_text, stable_json
+
+
+@dataclass(frozen=True)
+class BoundedCapture:
+    stdout: str
+    stderr: str
+    stdout_overflow: bool
+    stderr_overflow: bool
+    timed_out: bool
+    spawn_failed: bool
+    exit_code: int | None
+    duration_ms: int
+
+
+def run_bounded_command(command: str | list[str], *, shell: bool, cwd: Path, env: dict[str, str],
+                        timeout: float, max_bytes: int, kill_drain_timeout: float = 2.0) -> BoundedCapture:
+    """Run a command scorer while retaining at most max_bytes from each stream."""
+    started = time.time()
+    try:
+        process = subprocess.Popen(
+            command, shell=shell, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        )
+    except OSError as exc:
+        return BoundedCapture("", str(exc), False, False, False, True, None,
+                              int((time.time() - started) * 1000))
+
+    stdout_data = bytearray()
+    stderr_data = bytearray()
+    stdout_overflow = threading.Event()
+    stderr_overflow = threading.Event()
+    killed = threading.Event()
+    lock = threading.Lock()
+
+    def kill_group() -> None:
+        if killed.is_set():
+            return
+        killed.set()
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def drain(stream: Any, retained: bytearray, overflow: threading.Event, *, kills_on_overflow: bool) -> None:
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                return
+            with lock:
+                remaining = max_bytes - len(retained)
+                if remaining > 0:
+                    retained.extend(chunk[:remaining])
+                if len(chunk) > max(remaining, 0):
+                    overflow.set()
+                    if kills_on_overflow:
+                        kill_group()
+
+    stdout_thread = threading.Thread(target=drain, args=(process.stdout, stdout_data, stdout_overflow),
+                                     kwargs={"kills_on_overflow": True}, daemon=True)
+    stderr_thread = threading.Thread(target=drain, args=(process.stderr, stderr_data, stderr_overflow),
+                                     kwargs={"kills_on_overflow": False}, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    timed_out = False
+    while process.poll() is None and not stdout_overflow.is_set():
+        if time.time() - started >= timeout:
+            timed_out = True
+            kill_group()
+            break
+        time.sleep(0.005)
+    if stdout_overflow.is_set():
+        kill_group()
+    try:
+        process.wait(timeout=kill_drain_timeout if killed.is_set() else max(timeout, 0.1))
+    except subprocess.TimeoutExpired:
+        kill_group()
+        process.wait()
+    join_timeout = kill_drain_timeout if killed.is_set() else max(timeout, 0.1)
+    stdout_thread.join(join_timeout)
+    stderr_thread.join(join_timeout)
+    try:
+        process.stdout.close()
+        process.stderr.close()
+    except OSError:
+        pass
+    return BoundedCapture(
+        bytes(stdout_data).decode("utf-8", "replace"), bytes(stderr_data).decode("utf-8", "replace"),
+        stdout_overflow.is_set(), stderr_overflow.is_set(), timed_out, False, process.returncode,
+        int((time.time() - started) * 1000),
+    )
 
 
 def _render_runner_arg(arg: str, env: dict[str, str]) -> str:
@@ -113,9 +208,13 @@ def scorer_limit_failure(scorer: dict[str, Any], required: bool, limit: str) -> 
 
 
 def prepare_command_verdict(result: dict[str, Any], scorer: dict[str, Any], required: bool,
-                            patterns: list[str], env_values: list[str], max_bytes: int) -> tuple[dict[str, Any], str]:
+                            patterns: list[str], env_values: list[str], max_bytes: int,
+                            stdout_capture_truncated: bool = False,
+                            stderr_capture_truncated: bool = False) -> tuple[dict[str, Any], str]:
     result, verdict_redacted = redact_json(result, patterns, env_values, max_bytes)
     result["diagnostics_redaction_version"] = 1
+    result["stdout_capture_truncated"] = stdout_capture_truncated
+    result["stderr_capture_truncated"] = stderr_capture_truncated
     if verdict_redacted:
         result["redacted"] = True
     serialized = json_text(result)
@@ -123,6 +222,8 @@ def prepare_command_verdict(result: dict[str, Any], scorer: dict[str, Any], requ
         result = scorer_limit_failure(scorer, required, "serialized-size")
         result, verdict_redacted = redact_json(result, patterns, env_values, max_bytes)
         result["diagnostics_redaction_version"] = 1
+        result["stdout_capture_truncated"] = stdout_capture_truncated
+        result["stderr_capture_truncated"] = stderr_capture_truncated
         if verdict_redacted:
             result["redacted"] = True
         serialized = json_text(result)
@@ -180,6 +281,8 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
         verdict = read_json(verdict_path)
         if not isinstance(verdict, dict):
             return scorer_failure(scorer, required, "command scorer verdict artifact must be an object")
+        verdict.setdefault("stdout_capture_truncated", False)
+        verdict.setdefault("stderr_capture_truncated", False)
         return verdict
     scorers_dir.mkdir(parents=True, exist_ok=True)
     timeout = int(scorer.get("timeout_seconds") or DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS)
@@ -193,9 +296,8 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
         command = scorer.get("command")
         if not isinstance(command, str) or not command:
             result = scorer_failure(scorer, required, "command scorer shell mode requires command")
-            result, _ = redact_json(result, patterns, env_values, max_bytes)
-            result["diagnostics_redaction_version"] = 1
-            write_json(verdict_path, result)
+            result, serialized = prepare_command_verdict(result, scorer, required, patterns, env_values, max_bytes)
+            write_json(verdict_path, result, serialized=serialized)
             return result
         cmd: str | list[str] = _render_runner_arg(command, eval_env)
         shell = True
@@ -203,19 +305,21 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
         argv_raw = scorer.get("argv")
         if not isinstance(argv_raw, list) or not argv_raw:
             result = scorer_failure(scorer, required, "command scorer requires argv when shell:false")
-            result, _ = redact_json(result, patterns, env_values, max_bytes)
-            result["diagnostics_redaction_version"] = 1
-            write_json(verdict_path, result)
+            result, serialized = prepare_command_verdict(result, scorer, required, patterns, env_values, max_bytes)
+            write_json(verdict_path, result, serialized=serialized)
             return result
         cmd = [_render_runner_arg(str(a), eval_env) for a in argv_raw]
         shell = False
-    process_result = run_process(cmd, shell=shell, cwd=case_dir / "workspace", env=env, timeout=timeout)
+    process_result = run_bounded_command(cmd, shell=shell, cwd=case_dir / "workspace", env=env,
+                                         timeout=timeout, max_bytes=max_bytes)
     stdout = process_result.stdout
     stderr = process_result.stderr
-    if process_result.timed_out:
-        result = scorer_failure(scorer, required, f"command scorer timed out after {timeout}s")
-    elif process_result.spawn_failed:
+    if process_result.spawn_failed:
         result = scorer_failure(scorer, required, f"command scorer spawn failed: {stderr}")
+    elif process_result.stdout_overflow:
+        result = scorer_limit_failure(scorer, required, "stdout-bytes")
+    elif process_result.timed_out:
+        result = scorer_failure(scorer, required, f"command scorer timed out after {timeout}s")
     elif process_result.exit_code != 0:
         result = scorer_failure(scorer, required, f"command scorer exited {process_result.exit_code}")
     else:
@@ -227,15 +331,17 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
             result = scorer_failure(scorer, required, f"invalid command scorer JSON: {exc}")
         else:
             result = normalize_command_verdict(raw, scorer, required)
-    stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
-    stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
     stdout, _ = apply_redaction(stdout, patterns, env_values)
     stderr, _ = apply_redaction(stderr, patterns, env_values)
     stdout = stdout.encode()[:max_bytes].decode("utf-8", "replace")
     stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
     (scorers_dir / f"{scorer_id}.stdout.txt").write_text(stdout)
     (scorers_dir / f"{scorer_id}.stderr.txt").write_text(stderr)
-    result, serialized = prepare_command_verdict(result, scorer, required, patterns, env_values, max_bytes)
+    result, serialized = prepare_command_verdict(
+        result, scorer, required, patterns, env_values, max_bytes,
+        stdout_capture_truncated=process_result.stdout_overflow,
+        stderr_capture_truncated=process_result.stderr_overflow,
+    )
     write_json(verdict_path, result, serialized=serialized)
     return result
 

@@ -3499,6 +3499,71 @@ class EvalctlCliTests(unittest.TestCase):
         self.assertTrue(verdict["verdict_truncated"])
         self.assertLess(len(serialized.encode("utf-8")), VERDICT_MAX_SERIALIZED_BYTES)
 
+    def test_command_scorer_bounded_capture_flags_and_stdout_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "capture_scorer.py"
+            suite = self.load_suite(cwd)
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True,
+                                 "argv": [sys.executable, str(scorer_path)], "timeout_seconds": 5}]
+            valid = '{"ok":true,"score":1,"label":"pass","findings":[]}'
+            suite["runner"]["max_output_bytes"] = len(valid.encode("utf-8"))
+            self.write_suite(cwd, suite)
+
+            scorer_path.write_text(f"import sys\nsys.stdout.write({valid!r})\n")
+            self.envelope(["run", "code-review", "--run-id", "capture-at-limit", "--json"], cwd)
+            path = cwd / "evals" / "runs" / "capture-at-limit" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            verdict = json.loads(path.read_text())
+            self.assertTrue(verdict["ok"])
+            self.assertFalse(verdict["stdout_capture_truncated"])
+            self.assertFalse(verdict["stderr_capture_truncated"])
+
+            scorer_path.write_text("import sys, time\nsys.stdout.buffer.write(b'x' * 1000000)\nsys.stdout.flush()\ntime.sleep(10)\n")
+            self.envelope(["run", "code-review", "--run-id", "capture-overflow", "--json"], cwd)
+            path = cwd / "evals" / "runs" / "capture-overflow" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            verdict = json.loads(path.read_text())
+            self.assertTrue(verdict["verdict_truncated"])
+            self.assertTrue(verdict["stdout_capture_truncated"])
+            self.assertTrue(verdict["findings"][0]["why"].startswith("verdict exceeded stdout-bytes limit"))
+            debug = cwd / "evals" / "runs" / "capture-overflow" / "cases" / "cr-pass" / "scorers" / "judge.stdout.txt"
+            self.assertLessEqual(len(debug.read_bytes()), len(valid.encode("utf-8")))
+
+            scorer_path.write_text(f"import sys\nsys.stdout.write({valid!r})\nsys.stderr.write('x' * 1000000)\n")
+            self.envelope(["run", "code-review", "--run-id", "stderr-overflow", "--json"], cwd)
+            path = cwd / "evals" / "runs" / "stderr-overflow" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            verdict = json.loads(path.read_text())
+            self.assertTrue(verdict["ok"])
+            self.assertFalse(verdict["stdout_capture_truncated"])
+            self.assertTrue(verdict["stderr_capture_truncated"])
+
+    def test_bounded_command_drains_streams_concurrently_and_kills_the_group(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            alternating = (
+                "import sys\n"
+                "for _ in range(4):\n"
+                "  sys.stdout.buffer.write(b'a' * 65536); sys.stdout.flush()\n"
+                "  sys.stderr.buffer.write(b'b' * 65536); sys.stderr.flush()\n"
+            )
+            capture = scoring.run_bounded_command([sys.executable, "-c", alternating], shell=False,
+                                                  cwd=cwd, env=os.environ.copy(), timeout=2,
+                                                  max_bytes=1024 * 1024)
+            self.assertEqual(capture.exit_code, 0)
+            self.assertFalse(capture.stdout_overflow)
+            self.assertFalse(capture.stderr_overflow)
+            self.assertEqual(len(capture.stdout.encode()), 4 * 65536)
+            self.assertEqual(len(capture.stderr.encode()), 4 * 65536)
+
+            grandchild = "import sys, time; sys.stdout.buffer.write(b'x' * 1000000); sys.stdout.flush(); time.sleep(10)"
+            parent = f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(10)"
+            started = time.time()
+            capture = scoring.run_bounded_command([sys.executable, "-c", parent], shell=False,
+                                                  cwd=cwd, env=os.environ.copy(), timeout=5, max_bytes=16)
+            self.assertTrue(capture.stdout_overflow)
+            self.assertLess(time.time() - started, 4)
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")
