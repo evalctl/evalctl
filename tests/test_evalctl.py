@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import pty
@@ -3627,6 +3628,26 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual([case.attrib["name"] for case in cases], sorted((case.attrib["name"] for case in cases), key=os.fsencode))
             for case in cases:
                 self.assertEqual(set(case.attrib), {"name", "classname", "time"})
+
+    def test_junit_body_pipeline_is_key_free_sanitized_and_bounded(self) -> None:
+        logical = "ok\x00\x01&<>\"'"
+        body = reports._junit_body([logical])
+        self.assertIn("ok\uFFFD\uFFFD&amp;&lt;&gt;&quot;&#x27;", body)
+        long_body = reports._junit_body(["é" * 10_000])
+        decoded = html.unescape(long_body)
+        self.assertEqual(decoded.count(reports.JUNIT_TRUNCATION_MARKER), 1)
+        self.assertLessEqual(len(decoded.encode("utf-8")), reports.JUNIT_BODY_MAX_BYTES)
+
+    def test_junit_command_fragment_uses_capture_redacted_values_not_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            case_dir = Path(td)
+            (case_dir / "scorers").mkdir()
+            score = {"scorer": "command", "id": "judge", "label": "[REDACTED]", "findings": [{"secret-key": "[REDACTED]", "nested": {"why": "safe"}}], "diagnostics_redaction_version": 1}
+            fragment = reports._junit_command_fragment(score, case_dir)
+            self.assertEqual(fragment, "[REDACTED]\nsafe\n[REDACTED]")
+            self.assertNotIn("secret-key", fragment)
+            builtin = reports._junit_builtin_fragment({"scorer": "contains", "findings": [{"value": "secret"}]})
+            self.assertEqual(builtin, "builtin:contains\nbuilt-in scorer contains failed; see run artifacts")
 
     def test_report_junit_forces_raw_xml_and_rejects_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:

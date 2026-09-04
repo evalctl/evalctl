@@ -67,6 +67,78 @@ def _junit_seconds(duration_ms: object) -> str:
     return f"{float(duration_ms or 0) / 1000:.3f}"
 
 
+JUNIT_BODY_MAX_BYTES = 8192
+JUNIT_TRUNCATION_MARKER = "\n[evalctl: truncated, see run artifacts]"
+
+
+def _string_leaves(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        return [leaf for item in value for leaf in _string_leaves(item)]
+    if isinstance(value, dict):
+        return [leaf for key in sorted(value, key=os.fsencode) for leaf in _string_leaves(value[key])]
+    return []
+
+
+def _junit_sanitize(value: str) -> str:
+    def valid(character: str) -> bool:
+        codepoint = ord(character)
+        return codepoint in (0x9, 0xA, 0xD) or 0x20 <= codepoint <= 0xD7FF or 0xE000 <= codepoint <= 0xFFFD or 0x10000 <= codepoint <= 0x10FFFF
+    return "".join(character if valid(character) else "\uFFFD" for character in value)
+
+
+def _junit_cap(value: str) -> str:
+    raw = value.encode("utf-8")
+    if len(raw) <= JUNIT_BODY_MAX_BYTES:
+        return value
+    limit = JUNIT_BODY_MAX_BYTES - len(JUNIT_TRUNCATION_MARKER.encode("utf-8"))
+    return raw[:limit].decode("utf-8", "ignore") + JUNIT_TRUNCATION_MARKER
+
+
+def _junit_body(fragments: list[str]) -> str:
+    return _xml_text(_junit_cap(_junit_sanitize("\n".join(fragment for fragment in fragments if fragment))))
+
+
+def _junit_command_fragment(score: dict[str, Any], case_dir: Path) -> str:
+    scorer_id = str(score["id"])
+    if score.get("diagnostics_redaction_version") != 1:
+        return f"command:{scorer_id}: diagnostic artifact does not prove redaction protocol v1; diagnostic text omitted (see run artifacts)"
+    items: list[str] = []
+    label = score.get("label")
+    if isinstance(label, str) and label:
+        items.append(label)
+    items.extend(_string_leaves(score.get("findings", [])))
+    stderr_path = case_dir / "scorers" / f"{scorer_id}.stderr.txt"
+    if stderr_path.exists():
+        stderr = stderr_path.read_text(errors="replace")
+        if stderr:
+            items.append(stderr)
+    return "\n".join(items)
+
+
+def _junit_builtin_fragment(score: dict[str, Any]) -> str:
+    name = str(score["scorer"])
+    return f"builtin:{name}\nbuilt-in scorer {name} failed; see run artifacts"
+
+
+def _junit_score_fragments(scores: list[dict[str, Any]], case_dir: Path, *, errors_only: bool) -> list[str]:
+    selected = [score for score in scores if bool(score.get("error"))] if errors_only else [score for score in scores if not score.get("ok")]
+    selected.sort(key=lambda score: (0, str(score["scorer"])) if score.get("scorer") != "command" else (1, str(score.get("id", ""))))
+    return [_junit_command_fragment(score, case_dir) if score.get("scorer") == "command" else _junit_builtin_fragment(score) for score in selected]
+
+
+def _junit_runner_fragment(runner: dict[str, Any], case_dir: Path) -> str:
+    reason = "runner timed out" if runner.get("timed_out") else "runner failed to start"
+    items = [f"runner: {reason}"]
+    stderr_path = case_dir / "runner.stderr.txt"
+    if runner.get("diagnostics_redaction_version") == 1 and stderr_path.exists():
+        stderr = stderr_path.read_text(errors="replace")
+        if stderr:
+            items.append(stderr)
+    return "\n".join(items)
+
+
 def junit_report(run_dir: Path) -> str:
     """Render the fixed 1.1 JUnit element and attribute set for one run."""
     manifest_doc = read_json(run_dir / "manifest.json")
@@ -87,9 +159,12 @@ def junit_report(run_dir: Path) -> str:
         if score["status"] == "pass":
             lines.append(f"    <testcase {case_attrs}/>")
         elif score["status"] == "fail":
-            lines.append(f'    <testcase {case_attrs}><failure type="scorer-failure" message="scorer failure; see body"></failure></testcase>')
+            body = _junit_body(_junit_score_fragments(score["scores"], run_dir / "cases" / entry["id"], errors_only=False))
+            lines.append(f'    <testcase {case_attrs}><failure type="scorer-failure" message="scorer failure; see body">{body}</failure></testcase>')
         else:
             error_type = "runner-error" if runner.get("timed_out") or runner.get("spawn_failed") else "scorer-error"
-            lines.append(f'    <testcase {case_attrs}><error type="{error_type}" message="case errored; see body"></error></testcase>')
+            fragments = [_junit_runner_fragment(runner, run_dir / "cases" / entry["id"])] if error_type == "runner-error" else _junit_score_fragments(score["scores"], run_dir / "cases" / entry["id"], errors_only=True)
+            body = _junit_body(fragments)
+            lines.append(f'    <testcase {case_attrs}><error type="{error_type}" message="case errored; see body">{body}</error></testcase>')
     lines.extend(["  </testsuite>", "</testsuites>"])
     return "\n".join(lines) + "\n"
