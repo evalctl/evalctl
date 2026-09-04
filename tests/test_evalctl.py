@@ -3685,12 +3685,15 @@ class EvalctlCliTests(unittest.TestCase):
             self.envelope(["run", "code-review", "--run-id", "junit-mode", "--json"], cwd)
             result = self.run_cli(["report", "junit-mode", "--format", "junit"], cwd)
             self.assertTrue(result.stdout.startswith('<?xml version="1.0" encoding="UTF-8"?>\n'))
+            missing = self.run_cli(["report", "missing-junit-run", "--format", "junit"], cwd, expect=1)
+            self.assertEqual(json.loads(missing.stdout)["errors"][0]["code"], "E_RUN_NOT_FOUND")
+            self.assertFalse(missing.stdout.startswith("<?xml"))
             rejected = self.run_cli(["report", "junit-mode", "--format", "junit", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(rejected.stdout)["errors"][0]["code"], "E_CASE_INVALID")
             for flag, value in (("--limit", "1"), ("--cursor", "ignored")):
                 with self.subTest(flag=flag):
                     rejected = self.run_cli(["report", "junit-mode", "--format", "junit", flag, value], cwd, expect=1)
-                    self.assertIn("cannot be used with --format junit", rejected.stderr)
+                    self.assertEqual(json.loads(rejected.stdout)["errors"][0]["code"], "E_CASE_INVALID")
                     self.assertFalse(rejected.stdout.startswith("<?xml"))
 
     def test_raw_markdown_report_ignores_pagination_but_envelope_applies_it(self) -> None:

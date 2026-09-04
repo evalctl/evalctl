@@ -100,8 +100,6 @@ def classify_run_dir(run_dir: Path) -> dict[str, Any]:
 
 
 def wants_json(argv: list[str]) -> bool:
-    if report_format_junit_requested(argv) and "--json" not in argv:
-        return False
     return "--json" in argv or not sys.stdout.isatty()
 
 
