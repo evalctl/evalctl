@@ -3564,6 +3564,30 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(capture.stdout_overflow)
             self.assertLess(time.time() - started, 4)
 
+    def test_max_output_bytes_validation_rejects_invalid_values_before_run(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            for value in (0, -1, 1.5, True, False, "big"):
+                with self.subTest(value=value):
+                    suite = self.load_suite(cwd)
+                    suite["runner"]["max_output_bytes"] = value
+                    self.write_suite(cwd, suite)
+                    result = self.run_cli(["run", "code-review", "--run-id", f"invalid-{value}", "--json"], cwd, expect=1)
+                    self.assertEqual(json.loads(result.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+                    self.assertFalse((cwd / "evals" / "runs" / f"invalid-{value}").exists())
+
+            suite = self.load_suite(cwd)
+            suite["runner"]["max_output_bytes"] = 10
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True,
+                                 "max_output_bytes": 100, "argv": [sys.executable, "-c", "print('{\\\"ok\\\":true,\\\"score\\\":1,\\\"label\\\":\\\"pass\\\",\\\"findings\\\":[]}')"]}]
+            self.write_suite(cwd, suite)
+            self.envelope(["validate", "code-review", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "scorer-budget-override", "--json"], cwd)
+            verdict = json.loads((cwd / "evals" / "runs" / "scorer-budget-override" / "cases" / "cr-pass" / "scorers" / "judge.json").read_text())
+            self.assertTrue(verdict["ok"])
+            self.assertFalse(verdict["stdout_capture_truncated"])
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")

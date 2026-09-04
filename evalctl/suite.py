@@ -18,6 +18,12 @@ VALID_SCORER_NAMES = frozenset(set(BUILTIN_SCORERS) | {"command"})
 INIT_REMOVED_SAMPLE_CAP = 100
 
 
+def _validate_max_output_bytes(value: Any, location: str) -> None:
+    if type(value) is not int or value < 1:
+        raise EvalctlError("E_CASE_INVALID", f"{location} must be an integer >= 1",
+                           "set max_output_bytes to a positive integer", 1)
+
+
 def available_suites() -> list[str]:
     root = Path("evals") / "suites"
     return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
@@ -50,6 +56,8 @@ def validate_suite(suite_dir: Path) -> dict[str, Any]:
         raise EvalctlError("E_SCHEMA_VIOLATION", "runner must define argv for shell:false or command for shell:true", f"fix {suite_dir/'suite.json'} runner", 1)
     if has_argv and has_cmd:
         raise EvalctlError("E_SCHEMA_VIOLATION", "runner must not define both argv and command", f"fix {suite_dir/'suite.json'} runner", 1)
+    if "max_output_bytes" in runner:
+        _validate_max_output_bytes(runner["max_output_bytes"], "runner.max_output_bytes")
     for scorer in suite.get("scorers", []):
         name = scorer.get("name") if isinstance(scorer, dict) else None
         if name not in VALID_SCORER_NAMES:
@@ -58,6 +66,8 @@ def validate_suite(suite_dir: Path) -> dict[str, Any]:
             if suggestion:
                 ctx["did_you_mean"] = suggestion[0]
             raise EvalctlError("E_CASE_INVALID", f"unknown scorer name: {name}", "use a built-in scorer name or 'command'", 1, **ctx)
+        if name == "command" and "max_output_bytes" in scorer:
+            _validate_max_output_bytes(scorer["max_output_bytes"], "command scorer max_output_bytes")
     cases = load_cases(suite_dir / suite.get("cases", "cases.jsonl"))
     for case in cases:
         for key in ("task", "workspace"):

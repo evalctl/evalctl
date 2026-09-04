@@ -287,7 +287,7 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
     scorers_dir.mkdir(parents=True, exist_ok=True)
     timeout = int(scorer.get("timeout_seconds") or DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS)
     runner = suite.get("runner", {})
-    max_bytes = int(scorer.get("max_output_bytes") or runner.get("max_output_bytes") or 5 * 1024 * 1024)
+    max_bytes = int(scorer.get("max_output_bytes", runner.get("max_output_bytes", 5 * 1024 * 1024)))
     env = {k: os.environ[k] for k in runner.get("env_allowlist", []) if k in os.environ}
     env.update(eval_env)
     env_values = [os.environ.get(k, "") for k in runner.get("redact_env_values", [])]
