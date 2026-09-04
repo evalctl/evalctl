@@ -467,7 +467,12 @@ STATUS_COUNTS_SCHEMA = {"type": "object", "additionalProperties": {"type": "inte
 
 CASE_RESULT_SCHEMA = schema_object(["id", "status", "ok"], {"id": {"type": "string"}, "status": ref("case_status"), "ok": {"type": "boolean"}})
 
-FAILURE_SCHEMA = schema_object(["id", "status", "scores"], {"id": {"type": "string"}, "status": ref("case_status"), "scores": {"type": "array", "items": {"type": "object"}}})
+REPORT_SCORE_SCHEMA = schema_object(
+    ["scorer", "ok", "label", "findings"],
+    {"scorer": {"type": "string"}, "ok": {"type": "boolean"}, "label": {"type": "string"}, "findings": {"type": "array"}, "id": {"type": "string"}, "redacted": {"type": "boolean"}},
+)
+
+FAILURE_SCHEMA = schema_object(["id", "status", "scores"], {"id": {"type": "string"}, "status": ref("case_status"), "scores": {"type": "array", "items": REPORT_SCORE_SCHEMA}, "runner_stderr_redacted": {"type": "boolean"}})
 
 PLAN_CASE_SCHEMA = schema_object(["id", "action", "reason"], {"id": {"type": "string"}, "action": ref("plan_action"), "reason": {"type": "string"}})
 

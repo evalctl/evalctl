@@ -3422,6 +3422,40 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(verdict["findings"][0]["nested"]["number"], 3)
             self.assertIn("env-secret-key", verdict["findings"][0])
 
+    def test_report_surfaces_only_true_redaction_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "redacting_scorer.py"
+            scorer_path.write_text("import json\nprint(json.dumps({'ok': False, 'score': 0, 'label': 'TOKEN123', 'findings': []}))\n")
+            suite = self.load_suite(cwd)
+            suite["runner"]["redact_patterns"] = ["TOKEN[0-9]+"]
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True, "argv": [sys.executable, str(scorer_path)]}]
+            self.write_suite(cwd, suite)
+            self.envelope(["run", "code-review", "--run-id", "redacted-report", "--json"], cwd)
+            runner_path = cwd / "evals" / "runs" / "redacted-report" / "cases" / "cr-pass" / "runner.json"
+            runner_doc = json.loads(runner_path.read_text())
+            runner_doc["stderr_redacted"] = True
+            runner_path.write_text(json.dumps(runner_doc, sort_keys=True) + "\n")
+
+            data = self.envelope(["report", "redacted-report", "--format", "json"], cwd)["data"]
+            self.assertTrue(data["failures"][0]["scores"][0]["redacted"])
+            self.assertTrue(data["failures"][0]["runner_stderr_redacted"])
+            markdown = self.run_cli(["report", "redacted-report", "--format", "markdown"], cwd).stdout
+            self.assertIn("(redacted)", markdown)
+            self.assertIn("runner stderr redacted", markdown)
+
+            runner_doc["stderr_redacted"] = False
+            runner_path.write_text(json.dumps(runner_doc, sort_keys=True) + "\n")
+            verdict_path = cwd / "evals" / "runs" / "redacted-report" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            verdict_doc = json.loads(verdict_path.read_text())
+            verdict_doc.pop("redacted")
+            verdict_path.write_text(json.dumps(verdict_doc, sort_keys=True) + "\n")
+            unmarked = self.envelope(["report", "redacted-report", "--format", "json"], cwd)["data"]["failures"][0]
+            self.assertNotIn("redacted", unmarked["scores"][0])
+            self.assertNotIn("runner_stderr_redacted", unmarked)
+
     def test_synthetic_runner_error_is_capture_redacted_and_marked(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)

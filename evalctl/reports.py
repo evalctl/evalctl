@@ -33,7 +33,11 @@ def report_data(run_dir: Path) -> dict[str, Any]:
     for entry in sorted(manifest_doc["cases"], key=lambda c: c["id"]):
         score = recompute_case_score(run_dir, entry, suite)
         aggregate = sum(s["score"] for s in score["scores"]) / max(len(score["scores"]), 1)
-        cases.append({"id": score["case_id"], "status": score["status"], "ok": score["ok"], "aggregate_score": aggregate, "scores": score["scores"], "artifacts": entry["artifacts"]})
+        runner = read_json(run_dir / "cases" / entry["id"] / "runner.json")
+        case_data = {"id": score["case_id"], "status": score["status"], "ok": score["ok"], "aggregate_score": aggregate, "scores": score["scores"], "artifacts": entry["artifacts"]}
+        if runner.get("stderr_redacted") is True:
+            case_data["runner_stderr_redacted"] = True
+        cases.append(case_data)
     failures = [c for c in cases if c["status"] != "pass"]
     failures.sort(key=lambda c: (0 if c["status"] == "error" else 1, c["aggregate_score"], c["id"]))
 
@@ -41,9 +45,17 @@ def report_data(run_dir: Path) -> dict[str, Any]:
         out = {"scorer": score["scorer"], "ok": score["ok"], "label": score["label"], "findings": score["findings"]}
         if "id" in score:
             out["id"] = score["id"]
+        if score.get("redacted") is True:
+            out["redacted"] = True
         return out
 
-    normalized = {"run": {"ok": not failures, "suite": manifest_doc["suite"]["name"], "case_count": len(cases), "status_counts": status_counts(cases)}, "failures": [{"id": f["id"], "status": f["status"], "scores": [report_score(s) for s in f["scores"]]} for f in failures], "cases": [{"id": c["id"], "status": c["status"], "ok": c["ok"]} for c in cases]}
+    def report_failure(failure: dict[str, Any]) -> dict[str, Any]:
+        out = {"id": failure["id"], "status": failure["status"], "scores": [report_score(score) for score in failure["scores"]]}
+        if failure.get("runner_stderr_redacted") is True:
+            out["runner_stderr_redacted"] = True
+        return out
+
+    normalized = {"run": {"ok": not failures, "suite": manifest_doc["suite"]["name"], "case_count": len(cases), "status_counts": status_counts(cases)}, "failures": [report_failure(failure) for failure in failures], "cases": [{"id": c["id"], "status": c["status"], "ok": c["ok"]} for c in cases]}
     return {**normalized, "run_id": manifest_doc["run_id"], "report_hash": sha256_text(stable_json(normalized))}
 
 
@@ -55,7 +67,10 @@ def markdown_report(data: dict[str, Any]) -> str:
         lines.append(f"- `{failure['id']}` {failure['status']}")
         for score in failure["scores"]:
             if not score["ok"]:
-                lines.append(f"  - {score['scorer']}: {score['label']} {score['findings']}")
+                marker = " (redacted)" if score.get("redacted") is True else ""
+                lines.append(f"  - {score['scorer']}: {score['label']} {score['findings']}{marker}")
+        if failure.get("runner_stderr_redacted") is True:
+            lines.append("  - runner stderr redacted")
     return "\n".join(lines) + "\n"
 
 
