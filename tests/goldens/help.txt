@@ -17,7 +17,7 @@ COMMANDS:
   case add <suite> --task TEXT --workspace PATH [--id ID] [--diff PATH] [--expect-json JSON] [--json]
   scorer add <suite> --name NAME [--required|--advisory] [--id ID] [--argv ARGV|--command CMD --shell] [--json]
   status <run-id|--run-dir PATH> [--json]
-  report <run-id|--run-dir PATH> [--format markdown|json] [--json]
+  report <run-id|--run-dir PATH> [--format markdown|json|junit] [--json]
 
 GLOBAL FLAGS:
   --json           Structured envelope output

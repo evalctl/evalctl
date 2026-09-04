@@ -147,6 +147,100 @@
             "additionalProperties": {
               "type": "object"
             },
+            "properties": {
+              "report": {
+                "additionalProperties": true,
+                "properties": {
+                  "report_formats": {
+                    "additionalProperties": true,
+                    "properties": {
+                      "default_non_terminal": {
+                        "type": "string"
+                      },
+                      "default_terminal": {
+                        "type": "string"
+                      },
+                      "envelope_formats": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "formats": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "json_flag_policy": {
+                        "additionalProperties": true,
+                        "properties": {
+                          "json": {
+                            "type": "string"
+                          },
+                          "junit": {
+                            "type": "string"
+                          },
+                          "markdown": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "markdown",
+                          "json",
+                          "junit"
+                        ],
+                        "type": "object"
+                      },
+                      "pagination_policy": {
+                        "additionalProperties": true,
+                        "properties": {
+                          "json": {
+                            "type": "string"
+                          },
+                          "junit": {
+                            "type": "string"
+                          },
+                          "markdown_envelope": {
+                            "type": "string"
+                          },
+                          "markdown_raw": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "markdown_raw",
+                          "markdown_envelope",
+                          "json",
+                          "junit"
+                        ],
+                        "type": "object"
+                      },
+                      "raw_output_formats": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "formats",
+                      "default_terminal",
+                      "default_non_terminal",
+                      "raw_output_formats",
+                      "envelope_formats",
+                      "pagination_policy",
+                      "json_flag_policy"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "report_formats"
+                ],
+                "type": "object"
+              }
+            },
             "type": "object"
           }
         },
@@ -170,7 +264,7 @@
   "errors": [],
   "meta": {
     "contract_version": "1.0",
-    "data_hash": "sha256:b247136f25caedf7c01b347d16d691174e7b059a77f8967adffbbdeca8cb0d58",
+    "data_hash": "sha256:655ffdf3699436a1ba7e2b878603869731e69c2520a7ec09e7cc030b2f70a819",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

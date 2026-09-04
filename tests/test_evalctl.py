@@ -3638,6 +3638,17 @@ class EvalctlCliTests(unittest.TestCase):
             rejected = self.run_cli(["report", "junit-mode", "--format", "junit", "--json"], cwd, expect=1)
             self.assertEqual(json.loads(rejected.stdout)["errors"][0]["code"], "E_CASE_INVALID")
 
+    def test_raw_markdown_report_ignores_pagination_but_envelope_applies_it(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "markdown-page", "--json"], cwd)
+            plain = self.run_cli(["report", "markdown-page", "--format", "markdown"], cwd).stdout
+            ignored = self.run_cli(["report", "markdown-page", "--format", "markdown", "--limit", "1", "--cursor", "ignored"], cwd).stdout
+            self.assertEqual(ignored, plain)
+            paged = self.envelope(["report", "markdown-page", "--format", "markdown", "--json", "--limit", "1"], cwd)
+            self.assertEqual(len(paged["data"]["cases"]), 1)
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")

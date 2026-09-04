@@ -404,6 +404,15 @@ def capabilities_data(*, probe_spoolctl_func: Callable[..., dict[str, Any]] | No
     except EvalctlError:
         inferctl_status = {"available": False, "planned": True}
     verbs = {name: capabilities_entry_from_spec(spec) for name, spec in COMMAND_SPECS.items()}
+    verbs["report"]["report_formats"] = {
+        "formats": ["markdown", "json", "junit"],
+        "default_terminal": "markdown",
+        "default_non_terminal": "json",
+        "raw_output_formats": ["markdown", "junit"],
+        "envelope_formats": ["json"],
+        "pagination_policy": {"markdown_raw": "ignored", "markdown_envelope": "applied", "json": "applied", "junit": "reject"},
+        "json_flag_policy": {"markdown": "envelope", "json": "envelope", "junit": "reject"},
+    }
     return {
         "tool_name": TOOL,
         "contract_version": CONTRACT_VERSION,
@@ -478,7 +487,27 @@ DATA_SCHEMAS = {
             "tool_name": {"type": "string"},
             "contract_version": {"type": "string", "pattern": r"^\d+\.\d+$"},
             "features": {"type": "array", "items": {"type": "string"}},
-            "verbs": {"type": "object", "additionalProperties": {"type": "object"}},
+            "verbs": {
+                "type": "object",
+                "properties": {
+                    "report": schema_object(
+                        ["report_formats"],
+                        {"report_formats": schema_object(
+                            ["formats", "default_terminal", "default_non_terminal", "raw_output_formats", "envelope_formats", "pagination_policy", "json_flag_policy"],
+                            {
+                                "formats": {"type": "array", "items": {"type": "string"}},
+                                "default_terminal": {"type": "string"},
+                                "default_non_terminal": {"type": "string"},
+                                "raw_output_formats": {"type": "array", "items": {"type": "string"}},
+                                "envelope_formats": {"type": "array", "items": {"type": "string"}},
+                                "pagination_policy": schema_object(["markdown_raw", "markdown_envelope", "json", "junit"], {key: {"type": "string"} for key in ("markdown_raw", "markdown_envelope", "json", "junit")}),
+                                "json_flag_policy": schema_object(["markdown", "json", "junit"], {key: {"type": "string"} for key in ("markdown", "json", "junit")}),
+                            },
+                        )},
+                    ),
+                },
+                "additionalProperties": {"type": "object"},
+            },
             "global_flags": {"type": "object", "additionalProperties": {"type": "string"}},
             "exit_codes": {"type": "object", "additionalProperties": {"type": "object"}},
             "error_codes": {"type": "object", "additionalProperties": schema_object(["class", "where", "surface"], {"class": {"type": "string"}, "exit": {"type": "integer"}, "where": {"type": "array", "items": {"type": "string"}}, "retryable": {"type": ["boolean", "null"]}, "surface": {"type": "string"}})},

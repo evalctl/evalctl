@@ -566,7 +566,7 @@
         "args": [
           "run-id"
         ],
-        "description": "Generate markdown or JSON report from run artifacts.",
+        "description": "Generate markdown, JSON, or JUnit report from run artifacts.",
         "exit_codes": [
           0,
           1,
@@ -581,7 +581,34 @@
           "--cursor"
         ],
         "json": true,
-        "mutates": false
+        "mutates": false,
+        "report_formats": {
+          "default_non_terminal": "json",
+          "default_terminal": "markdown",
+          "envelope_formats": [
+            "json"
+          ],
+          "formats": [
+            "markdown",
+            "json",
+            "junit"
+          ],
+          "json_flag_policy": {
+            "json": "envelope",
+            "junit": "reject",
+            "markdown": "envelope"
+          },
+          "pagination_policy": {
+            "json": "applied",
+            "junit": "reject",
+            "markdown_envelope": "applied",
+            "markdown_raw": "ignored"
+          },
+          "raw_output_formats": [
+            "markdown",
+            "junit"
+          ]
+        }
       },
       "robot-docs": {
         "args": [
@@ -723,7 +750,7 @@
   "errors": [],
   "meta": {
     "contract_version": "1.0",
-    "data_hash": "sha256:73ea0290b5fae6e9c4b655bc903238457599a48daa539e1b95f21916c3deac21",
+    "data_hash": "sha256:c915ea347d2bae186dd73bfc5bc863acbffcaecbcff00a2f849ea9527e900ca9",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"
