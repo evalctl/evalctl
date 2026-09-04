@@ -3649,6 +3649,35 @@ class EvalctlCliTests(unittest.TestCase):
             builtin = reports._junit_builtin_fragment({"scorer": "contains", "findings": [{"value": "secret"}]})
             self.assertEqual(builtin, "builtin:contains\nbuilt-in scorer contains failed; see run artifacts")
 
+    def test_junit_marker_gate_is_per_command_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            case_dir = Path(td)
+            (case_dir / "scorers").mkdir()
+            (case_dir / "scorers" / "legacy.stderr.txt").write_text("SECRET-LEGACY", encoding="utf-8")
+            legacy = {
+                "scorer": "command", "id": "legacy", "ok": False,
+                "label": "SECRET-LEGACY", "findings": [{"why": "SECRET-LEGACY"}],
+            }
+            current = {
+                "scorer": "command", "id": "current", "ok": False,
+                "label": "[REDACTED]", "findings": [{"why": "safe"}],
+                "diagnostics_redaction_version": 1,
+            }
+            fragments = reports._junit_score_fragments([legacy, current], case_dir, errors_only=False)
+            self.assertEqual(fragments, [
+                "[REDACTED]\nsafe",
+                "command:legacy: diagnostic artifact does not prove redaction protocol v1; diagnostic text omitted (see run artifacts)",
+            ])
+            self.assertNotIn("SECRET-LEGACY", "\n".join(fragments))
+
+            (case_dir / "runner.stderr.txt").write_text("SECRET-RUNNER", encoding="utf-8")
+            self.assertEqual(reports._junit_runner_fragment({"spawn_failed": True}, case_dir), "runner: runner failed to start")
+            (case_dir / "runner.stderr.txt").write_text("[REDACTED]", encoding="utf-8")
+            self.assertEqual(
+                reports._junit_runner_fragment({"spawn_failed": True, "diagnostics_redaction_version": 1}, case_dir),
+                "runner: runner failed to start\n[REDACTED]",
+            )
+
     def test_report_junit_forces_raw_xml_and_rejects_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cwd = Path(td)
