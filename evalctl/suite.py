@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -58,6 +59,16 @@ def validate_suite(suite_dir: Path) -> dict[str, Any]:
         raise EvalctlError("E_SCHEMA_VIOLATION", "runner must not define both argv and command", f"fix {suite_dir/'suite.json'} runner", 1)
     if "max_output_bytes" in runner:
         _validate_max_output_bytes(runner["max_output_bytes"], "runner.max_output_bytes")
+    patterns = runner.get("redact_patterns", [])
+    if not isinstance(patterns, list):
+        raise EvalctlError("E_CASE_INVALID", "runner.redact_patterns must be a list", "set redact_patterns to a list of regular expressions", 1)
+    for pattern in patterns:
+        if not isinstance(pattern, str):
+            raise EvalctlError("E_CASE_INVALID", "runner.redact_patterns entries must be strings", "use string regular expressions", 1)
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise EvalctlError("E_CASE_INVALID", f"invalid redact pattern: {exc}", "fix runner.redact_patterns", 1) from exc
     for scorer in suite.get("scorers", []):
         name = scorer.get("name") if isinstance(scorer, dict) else None
         if name not in VALID_SCORER_NAMES:

@@ -3588,6 +3588,23 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertTrue(verdict["ok"])
             self.assertFalse(verdict["stdout_capture_truncated"])
 
+    def test_invalid_redaction_pattern_fails_before_run_or_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.envelope(["run", "code-review", "--run-id", "source", "--json"], cwd)
+            suite = self.load_suite(cwd)
+            suite["runner"]["redact_patterns"] = ["["]
+            self.write_suite(cwd, suite)
+
+            run = self.run_cli(["run", "code-review", "--run-id", "bad-pattern", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(run.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            self.assertFalse((cwd / "evals" / "runs" / "bad-pattern").exists())
+
+            replay = self.run_cli(["replay", "--failed", "source", "--run-id", "bad-pattern-replay", "--json"], cwd, expect=1)
+            self.assertEqual(json.loads(replay.stdout)["errors"][0]["code"], "E_CASE_INVALID")
+            self.assertFalse((cwd / "evals" / "runs" / "bad-pattern-replay").exists())
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")
