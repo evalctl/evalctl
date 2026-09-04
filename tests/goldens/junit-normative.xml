@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="code-review" tests="3" failures="1" errors="1" time="0.015">
+  <testsuite name="code-review" tests="3" failures="1" errors="1" time="0.015">
+    <testcase name="cr-error" classname="code-review" time="0.007"><error type="runner-error" message="case errored; see body">runner: runner failed to start
+[REDACTED]</error></testcase>
+    <testcase name="cr-fail" classname="code-review" time="0.005"><failure type="scorer-failure" message="scorer failure; see body">builtin:contains
+built-in scorer contains failed; see run artifacts
+builtin:file-exists
+built-in scorer file-exists failed; see run artifacts
+builtin:workspace-diff
+built-in scorer workspace-diff failed; see run artifacts</failure></testcase>
+    <testcase name="cr-pass" classname="code-review" time="0.003"/>
+  </testsuite>
+</testsuites>

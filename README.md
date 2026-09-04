@@ -58,7 +58,7 @@ external service. v0.4 provides:
 - **Optional integrations** — spoolctl queueing and inferctl preflight
   provenance.
 
-`contract_version` is `1.0`.
+`contract_version` is `1.1`.
 
 ## Install
 

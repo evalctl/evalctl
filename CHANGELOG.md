@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-09-04
+
+Additive JUnit export release. `contract_version` is now `1.1`.
+
+- Added `report --format junit` with a frozen core XML element and attribute set.
+- JUnit reads only marker-approved capture-redacted diagnostic artifacts.
+- Added optional report redaction metadata for scorer and runner stderr output.
+- Existing markdown and JSON report modes keep their prior fields and behavior.
+
 ## 1.0.0 - 2026-09-03
 
 First stable machine-contract release. `contract_version` remains `1.0`.

@@ -95,8 +95,38 @@
                 "id": {
                   "type": "string"
                 },
+                "runner_stderr_redacted": {
+                  "type": "boolean"
+                },
                 "scores": {
                   "items": {
+                    "additionalProperties": true,
+                    "properties": {
+                      "findings": {
+                        "type": "array"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "ok": {
+                        "type": "boolean"
+                      },
+                      "redacted": {
+                        "type": "boolean"
+                      },
+                      "scorer": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "scorer",
+                      "ok",
+                      "label",
+                      "findings"
+                    ],
                     "type": "object"
                   },
                   "type": "array"
@@ -166,8 +196,8 @@
   },
   "errors": [],
   "meta": {
-    "contract_version": "1.0",
-    "data_hash": "sha256:cd7e4eb9f14132f2f477c8f1c1ab034eba3ea8799d5125e2a777146a68c3f633",
+    "contract_version": "1.1",
+    "data_hash": "sha256:c175074da45540157357eb1405ca691b67c522c26951f11895b7f9d6e8e9468c",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
     "ts_iso": "<TS_ISO>"

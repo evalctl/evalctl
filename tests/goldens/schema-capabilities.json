@@ -263,7 +263,7 @@
   },
   "errors": [],
   "meta": {
-    "contract_version": "1.0",
+    "contract_version": "1.1",
     "data_hash": "sha256:655ffdf3699436a1ba7e2b878603869731e69c2520a7ec09e7cc030b2f70a819",
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",

@@ -1,0 +1,38 @@
+{
+  "root": "testsuites",
+  "root_attributes": [
+    "name",
+    "tests",
+    "failures",
+    "errors",
+    "time"
+  ],
+  "testsuite_attributes": [
+    "name",
+    "tests",
+    "failures",
+    "errors",
+    "time"
+  ],
+  "testcase_attributes": [
+    "classname",
+    "name",
+    "time"
+  ],
+  "terminal_elements": [
+    {
+      "tag": "error",
+      "attributes": [
+        "type",
+        "message"
+      ]
+    },
+    {
+      "tag": "failure",
+      "attributes": [
+        "type",
+        "message"
+      ]
+    }
+  ]
+}

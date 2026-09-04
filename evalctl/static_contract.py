@@ -18,7 +18,7 @@ from .integration_contracts import MINIMUM_SPOOLCTL_CONTRACT, MINIMUM_SPOOLCTL_V
 # breaking change; MINOR bumps on a purely additive one, so an agent can gate on
 # `contract_version.split(".")` to tell additive contracts apart. See
 # docs/agent-guide.md for the compatibility rule.
-CONTRACT_VERSION = "1.0"
+CONTRACT_VERSION = "1.1"
 TOOL = "evalctl"
 DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS = 30
 DEFAULT_RESERVATION_TTL_SECONDS = 3600

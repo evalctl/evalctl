@@ -240,7 +240,7 @@ class EvalctlCliTests(unittest.TestCase):
             self.assertEqual(set(caps), {"ok", "tool_version", "data", "meta", "warnings", "commands", "errors"})
             self.assertTrue(caps["ok"])
             self.assertEqual(caps["meta"]["data_hash"], "sha256:73ea0290b5fae6e9c4b655bc903238457599a48daa539e1b95f21916c3deac21")
-            self.assertEqual(caps["tool_version"], "1.0.0")
+            self.assertEqual(caps["tool_version"], "1.1.0")
             self.assertEqual(caps["data"]["integrations"]["spoolctl"], {"available": False, "planned": False, "minimum_version": "0.4.11", "minimum_contract": 2})
             self.assertIn("durable_runs", caps["data"]["features"])
             self.assertIn("queue_spoolctl", caps["data"]["features"])
@@ -3711,6 +3711,43 @@ class EvalctlCliTests(unittest.TestCase):
                 reports._junit_runner_fragment({"spawn_failed": True, "diagnostics_redaction_version": 1}, case_dir),
                 "runner: runner failed to start\n[REDACTED]",
             )
+
+    def junit_normative_example(self) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            cases = self.load_cases(cwd)
+            error_case = {**cases[0], "id": "cr-error"}
+            self.write_cases(cwd, [*cases, error_case])
+            self.envelope(["run", "code-review", "--run-id", "junit-normative", "--json"], cwd)
+            run_dir = cwd / "evals" / "runs" / "junit-normative"
+            for case_id, duration_ms in (("cr-error", 7), ("cr-fail", 5), ("cr-pass", 3)):
+                runner_path = run_dir / "cases" / case_id / "runner.json"
+                runner_doc = json.loads(runner_path.read_text())
+                runner_doc["duration_ms"] = duration_ms
+                if case_id == "cr-error":
+                    runner_doc["spawn_failed"] = True
+                    runner_doc["diagnostics_redaction_version"] = 1
+                    (run_dir / "cases" / case_id / "runner.stderr.txt").write_text("[REDACTED]", encoding="utf-8")
+                runner_path.write_text(json.dumps(runner_doc, sort_keys=True) + "\n")
+            return reports.junit_report(run_dir)
+
+    def test_junit_normative_and_frozen_set_goldens(self) -> None:
+        xml = self.junit_normative_example()
+        self.assert_text_golden("junit-normative.xml", xml)
+        root = ET.fromstring(xml)
+        suite = root.find("testsuite")
+        self.assertIsNotNone(suite)
+        terminals = [child for case in suite.findall("testcase") for child in case if child.tag in {"failure", "error"}]
+        frozen_set = {
+            "root": root.tag,
+            "root_attributes": list(root.attrib),
+            "testsuite_attributes": list(suite.attrib),
+            "testcase_attributes": sorted({name for case in suite.findall("testcase") for name in case.attrib}),
+            "terminal_elements": [{"tag": terminal.tag, "attributes": list(terminal.attrib)} for terminal in terminals],
+        }
+        expected = json.loads((GOLDENS / "junit-frozen-set.json").read_text())
+        self.assertEqual(frozen_set, expected)
 
     def test_report_junit_forces_raw_xml_and_rejects_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:

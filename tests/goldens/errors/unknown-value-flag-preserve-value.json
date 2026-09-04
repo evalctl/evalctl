@@ -29,7 +29,7 @@
     }
   ],
   "meta": {
-    "contract_version": "1.0",
+    "contract_version": "1.1",
     "data_hash": null,
     "elapsed_ms": "<ELAPSED_MS>",
     "request_id": "<REQUEST_ID>",
