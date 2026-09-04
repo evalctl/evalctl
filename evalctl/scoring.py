@@ -10,6 +10,7 @@ from typing import Any
 
 from .artifacts import apply_redaction, read_json, write_json
 from .processes import run_process
+from .redaction import redact_json
 from .static_contract import BUILTIN_SCORERS, DEFAULT_COMMAND_SCORER_TIMEOUT_SECONDS, SAFE_ID_RE, sha256_text, stable_json
 
 
@@ -168,6 +169,8 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
         command = scorer.get("command")
         if not isinstance(command, str) or not command:
             result = scorer_failure(scorer, required, "command scorer shell mode requires command")
+            result, _ = redact_json(result, patterns, env_values, max_bytes)
+            result["diagnostics_redaction_version"] = 1
             write_json(verdict_path, result)
             return result
         cmd: str | list[str] = _render_runner_arg(command, eval_env)
@@ -176,6 +179,8 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
         argv_raw = scorer.get("argv")
         if not isinstance(argv_raw, list) or not argv_raw:
             result = scorer_failure(scorer, required, "command scorer requires argv when shell:false")
+            result, _ = redact_json(result, patterns, env_values, max_bytes)
+            result["diagnostics_redaction_version"] = 1
             write_json(verdict_path, result)
             return result
         cmd = [_render_runner_arg(str(a), eval_env) for a in argv_raw]
@@ -204,6 +209,10 @@ def run_command_scorer(scorer: dict[str, Any], required: bool, case_dir: Path | 
     stderr = stderr.encode()[:max_bytes].decode("utf-8", "replace")
     (scorers_dir / f"{scorer_id}.stdout.txt").write_text(stdout)
     (scorers_dir / f"{scorer_id}.stderr.txt").write_text(stderr)
+    result, verdict_redacted = redact_json(result, patterns, env_values, max_bytes)
+    result["diagnostics_redaction_version"] = 1
+    if verdict_redacted:
+        result["redacted"] = True
     write_json(verdict_path, result)
     return result
 

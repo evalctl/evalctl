@@ -3384,6 +3384,64 @@ class EvalctlCliTests(unittest.TestCase):
             time.sleep(3.5)
             self.assertFalse((case_dir / "workspace" / "command-scorer-grandchild").exists())
 
+    def test_command_verdict_redacts_string_values_and_marks_new_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            self.keep_first_case_only(cwd)
+            scorer_path = self.suite_path(cwd) / "redacting_scorer.py"
+            scorer_path.write_text(
+                "import json\n"
+                "print(json.dumps({'ok': False, 'score': 0, 'label': 'env-secret TOKEN123', "
+                "'findings': [{'nested': {'why': 'env-secret TOKEN456', 'number': 3}, "
+                "'env-secret-key': 'value'}]}))\n"
+            )
+            suite = self.load_suite(cwd)
+            suite["runner"]["redact_env_values"] = ["CAPTURE_SECRET"]
+            suite["runner"]["redact_patterns"] = ["TOKEN[0-9]+"]
+            suite["scorers"] = [{"name": "command", "id": "judge", "required": True,
+                                 "argv": [sys.executable, str(scorer_path)]}]
+            self.write_suite(cwd, suite)
+
+            self.envelope(["run", "code-review", "--run-id", "redacted-verdict", "--json"], cwd,
+                          extra_env={"CAPTURE_SECRET": "env-secret"})
+            verdict_path = cwd / "evals" / "runs" / "redacted-verdict" / "cases" / "cr-pass" / "scorers" / "judge.json"
+            verdict = json.loads(verdict_path.read_text())
+            self.assertEqual(verdict["diagnostics_redaction_version"], 1)
+            self.assertTrue(verdict["redacted"])
+            self.assertNotIn("env-secret", verdict["label"])
+            self.assertNotIn("TOKEN", verdict["findings"][0]["nested"]["why"])
+            self.assertEqual(verdict["findings"][0]["nested"]["number"], 3)
+            self.assertIn("env-secret-key", verdict["findings"][0])
+
+    def test_synthetic_runner_error_is_capture_redacted_and_marked(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            self.envelope(["init", "--json"], cwd)
+            suite_dir = self.suite_path(cwd)
+            suite = self.load_suite(cwd)
+            suite["runner"]["redact_env_values"] = ["CAPTURE_SECRET"]
+            suite["runner"]["redact_patterns"] = ["TOKEN[0-9]+"]
+            self.write_suite(cwd, suite)
+            case = self.load_cases(cwd)[0]
+            old_value = os.environ.get("CAPTURE_SECRET")
+            os.environ["CAPTURE_SECRET"] = "env-secret"
+            try:
+                runner.synthesize_case_error(suite_dir, suite, case, cwd / "evals" / "runs" / "synthetic",
+                                             RuntimeError("env-secret TOKEN123"))
+            finally:
+                if old_value is None:
+                    del os.environ["CAPTURE_SECRET"]
+                else:
+                    os.environ["CAPTURE_SECRET"] = old_value
+
+            case_dir = cwd / "evals" / "runs" / "synthetic" / "cases" / case["id"]
+            self.assertNotIn("env-secret", (case_dir / "runner.stderr.txt").read_text())
+            self.assertNotIn("TOKEN", (case_dir / "runner.stderr.txt").read_text())
+            runner_json = json.loads((case_dir / "runner.json").read_text())
+            self.assertEqual(runner_json["diagnostics_redaction_version"], 1)
+            self.assertTrue(runner_json["stderr_redacted"])
+
     def test_non_utf8_workspace_path_is_warned_and_omitted(self) -> None:
         if os.name == "nt":
             self.skipTest("raw non-UTF-8 path fixture is POSIX-only")

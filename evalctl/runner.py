@@ -20,6 +20,7 @@ from .artifacts import (
 from .inferctl import capture_inferctl_preflight
 from .integration_contracts import SPOOLCTL_UPGRADE_HINT
 from .processes import run_process
+from .redaction import redact_json
 from .run_state import (
     clean_pending_case_dirs,
     terminal_marker_count,
@@ -60,10 +61,16 @@ def synthesize_case_error(suite_dir: Path, suite: dict[str, Any], case: dict[str
     diff = diff_manifests(before, after)
     output_file.write_text("")
     (case_dir / "runner.stdout.txt").write_text("")
-    (case_dir / "runner.stderr.txt").write_text(str(exc))
+    runner = suite.get("runner", {})
+    max_bytes = int(runner.get("max_output_bytes") or 5 * 1024 * 1024)
+    env_values = [os.environ.get(k, "") for k in runner.get("redact_env_values", [])]
+    patterns = runner.get("redact_patterns", [])
+    stderr, stderr_redacted = redact_json(str(exc), patterns, env_values, max_bytes)
+    (case_dir / "runner.stderr.txt").write_text(stderr)
     runner_json = {"exit_code": None, "signal": None, "timed_out": False, "spawn_failed": True, "error_code": "E_RUNNER_FAILED", "duration_ms": 0,
                    "stdout_truncated": False, "stderr_truncated": False, "output_truncated": False,
-                   "stdout_redacted": False, "stderr_redacted": False, "output_redacted": False}
+                   "stdout_redacted": False, "stderr_redacted": stderr_redacted, "output_redacted": False,
+                   "diagnostics_redaction_version": 1}
     write_json(case_dir / "runner.json", runner_json)
     write_json(case_dir / "workspace-before.json", before)
     write_json(case_dir / "workspace-after.json", after)
@@ -181,7 +188,8 @@ def normalize_runner_artifacts(prepared: dict[str, Any], runner_result: dict[str
     error_code = "E_RUNNER_TIMEOUT" if runner_result["timed_out"] else "E_RUNNER_FAILED" if runner_result["spawn_failed"] else None
     runner_json = {"exit_code": runner_result["exit_code"], "signal": runner_result["signal"], "timed_out": runner_result["timed_out"], "spawn_failed": runner_result["spawn_failed"], "error_code": error_code, "duration_ms": runner_result["duration_ms"],
                    "stdout_truncated": trunc_stdout, "stderr_truncated": trunc_stderr, "output_truncated": output_truncated,
-                   "stdout_redacted": red_stdout, "stderr_redacted": red_stderr, "output_redacted": red_output}
+                   "stdout_redacted": red_stdout, "stderr_redacted": red_stderr, "output_redacted": red_output,
+                   "diagnostics_redaction_version": 1}
     if trunc_stdout or trunc_stderr or output_truncated:
         warnings.append({"code": "W_OUTPUT_TRUNCATED", "message": "runner output exceeded max_output_bytes"})
     write_json(case_dir / "runner.json", runner_json)
