@@ -107,7 +107,7 @@ operational state and are not part of `report_hash`.
 JSON artifacts are written by creating a temporary file in the target directory
 and replacing the final path with `os.replace`. This guarantees atomic visibility:
 readers never see a half-written final JSON file. It is not a full crash-durable
-guarantee; v0.1.1 does not fsync files or directories.
+guarantee; evalctl does not fsync files or directories.
 
 ## Deferred
 
