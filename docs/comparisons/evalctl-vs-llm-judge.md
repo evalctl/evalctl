@@ -3,7 +3,7 @@ title: evalctl and LLM-as-judge
 description: When a deterministic check beats asking another model, when a judge still earns its place, and why evalctl grades with fixed checks first.
 bucket: project
 order: 8
-draft: true
+draft: false
 ---
 
 # evalctl and LLM-as-judge

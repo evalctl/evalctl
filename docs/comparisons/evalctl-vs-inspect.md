@@ -3,7 +3,7 @@ title: evalctl and Inspect
 description: When to use evalctl, a single CLI the agent drives to check one change, and when to use Inspect, a full evaluation framework for running models and agents across datasets.
 bucket: project
 order: 6
-draft: true
+draft: false
 ---
 
 # evalctl and Inspect

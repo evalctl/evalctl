@@ -3,7 +3,7 @@ title: evalctl and Harbor
 description: When to use evalctl, a local command-line check that scores what your agent did, and when to use Harbor, a container-based harness for running agent benchmarks at scale.
 bucket: project
 order: 3
-draft: true
+draft: false
 ---
 
 # evalctl and Harbor

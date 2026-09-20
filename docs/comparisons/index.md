@@ -3,7 +3,7 @@ title: Tools for evaluating AI agents, compared
 description: How evalctl relates to prompt evaluators, agent-eval platforms, benchmarks, and observability tools — and when to reach for each.
 bucket: project
 order: 2
-draft: true
+draft: false
 ---
 
 # Tools for evaluating AI agents, compared

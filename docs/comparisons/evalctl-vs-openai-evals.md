@@ -3,7 +3,7 @@ title: evalctl and OpenAI Evals
 description: When to use evalctl to check what your agent did to a workspace, and when to use OpenAI Evals to grade a model's answers against a dataset.
 bucket: project
 order: 5
-draft: true
+draft: false
 ---
 
 # evalctl and OpenAI Evals

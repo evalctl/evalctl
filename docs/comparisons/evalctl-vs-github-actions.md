@@ -3,7 +3,7 @@ title: evalctl and GitHub Actions
 description: Why continuous integration alone can't grade an agent run, and how evalctl turns one into a pass/fail check with per-case detail.
 bucket: project
 order: 9
-draft: true
+draft: false
 ---
 
 # evalctl and GitHub Actions

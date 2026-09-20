@@ -3,7 +3,7 @@ title: evalctl and pytest
 description: Why a passing test suite doesn't tell you whether your agent did the right thing, and where evalctl fits around the tests you already have.
 bucket: project
 order: 7
-draft: true
+draft: false
 ---
 
 # evalctl and pytest

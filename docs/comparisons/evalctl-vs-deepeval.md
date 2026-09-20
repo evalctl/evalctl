@@ -3,7 +3,7 @@ title: evalctl and DeepEval
 description: When to use evalctl to check what your agent did to a workspace, and when to use DeepEval to score the quality of an LLM or RAG application's outputs.
 bucket: project
 order: 4
-draft: true
+draft: false
 ---
 
 # evalctl and DeepEval
