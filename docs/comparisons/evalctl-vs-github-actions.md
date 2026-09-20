@@ -95,6 +95,10 @@ take `--json` and isn't paginated.
 - Don't say evalctl needs a service or account to run in CI. It installs with
   `pip` and needs no model key by default.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - evalctl JUnit report (`report --format junit`, shipped in 1.1.0):

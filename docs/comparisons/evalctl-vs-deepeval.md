@@ -128,6 +128,10 @@ quality of what was said, and the correctness of what was done.
 - Don't call evalctl a replacement for DeepEval. They score different things — a
   workspace versus a model's outputs and trace.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - DeepEval repository, main at commit `23901cf`, 2026-09-20:

@@ -123,6 +123,10 @@ whether the agent acted correctly.
   agent did to a workspace.
 - Don't call evalctl a replacement for OpenAI Evals. They test different units.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - OpenAI Evals repository, main at commit `8eac7a7`, dated 2026-04-14, checked

@@ -134,6 +134,10 @@ different artifact than a Harbor trial in a sandboxed benchmark task.
 - Don't claim evalctl runs your agent for you the way Harbor's built-in agent
   does. evalctl scores an agent run; it doesn't need a model key to do so.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - Harbor repository, main at commit `71c77fd`, 2026-09-20:

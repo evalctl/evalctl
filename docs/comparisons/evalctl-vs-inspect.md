@@ -130,6 +130,10 @@ underneath a framework like Inspect, not a replacement for it.
   general framework; evalctl is a small local gate.
 - Don't call evalctl a replacement for Inspect. They work at different sizes.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - Inspect repository, version 0.3.266, main at commit `ec4dfc6`, dated

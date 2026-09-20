@@ -90,6 +90,10 @@ judge that is the *sole* reason a run passed is a gate an agent can move.
 - Don't say a deterministic check can grade open-ended quality. It grades
   verifiable facts.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - evalctl scorers and command scorers (deterministic built-ins; judge as a

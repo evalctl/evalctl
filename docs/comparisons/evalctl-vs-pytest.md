@@ -81,6 +81,10 @@ directory another machine can re-score offline.
 - Don't say evalctl uses an AI to judge the code. Its scorers are deterministic;
   model-based judging is not a shipped feature.
 
+## See also
+
+- [All tool comparisons](/docs/comparisons/) — the full set, and which tool fits which question.
+
 ## Sources
 
 - evalctl scorers and command scorers (deterministic checks; running your suite as
