@@ -2,7 +2,7 @@
 title: Security posture
 description: evalctl runs arbitrary local code and is not a sandbox. What that means, and the guarantees it does make.
 bucket: project
-order: 21
+order: 22
 ---
 
 # Security posture

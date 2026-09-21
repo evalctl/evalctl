@@ -91,6 +91,9 @@ not where it is different.
 - [evalctl and Braintrust](/docs/comparisons/evalctl-vs-braintrust/) — a local
   check pointed at your own repo, next to a hosted platform for dataset
   evaluations and comparable experiments.
+- [evalctl and Patronus](/docs/comparisons/evalctl-vs-patronus/) — scoring what an
+  agent did to a workspace, next to a hosted platform whose SDK scores LLM output
+  quality with managed and custom evaluators.
 - [evalctl and Langfuse](/docs/comparisons/evalctl-vs-langfuse/) — a local check
   that leaves a committable file, next to an open-source observability platform
   that traces an application and evaluates it.

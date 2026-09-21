@@ -2,7 +2,7 @@
 title: evalctl and Langfuse
 description: When to use evalctl, a local command-line check that scores what your agent did, and when to use Langfuse, an open-source observability platform that traces LLM applications and evaluates them across a team.
 bucket: project
-order: 12
+order: 13
 draft: false
 ---
 

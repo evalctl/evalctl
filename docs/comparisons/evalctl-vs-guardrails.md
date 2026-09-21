@@ -2,7 +2,7 @@
 title: evalctl and Guardrails (Guardrails AI, NeMo Guardrails)
 description: When to use evalctl, a local command-line check that runs your agent and scores what it did to a workspace, and when to use runtime guardrails like Guardrails AI or NeMo Guardrails, which validate an LLM's inputs and outputs live in the request path. Different jobs.
 bucket: project
-order: 20
+order: 21
 draft: false
 ---
 

@@ -2,7 +2,7 @@
 title: evalctl and Arize Phoenix
 description: When to use evalctl, a local command-line check that scores what your agent did, and when to use Arize Phoenix, an open-source observability platform that traces LLM applications and evaluates their spans.
 bucket: project
-order: 13
+order: 14
 draft: false
 ---
 

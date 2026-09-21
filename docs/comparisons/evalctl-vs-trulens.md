@@ -2,7 +2,7 @@
 title: evalctl and TruLens
 description: When to use evalctl, a local command-line check that scores what your agent did, and when to use TruLens, a local open-source library that scores LLM application outputs with feedback functions.
 bucket: project
-order: 15
+order: 16
 draft: false
 ---
 

@@ -2,7 +2,7 @@
 title: evalctl and W&B Weave
 description: When to use evalctl, a local command-line check that scores what your agent did, and when to use Weights & Biases Weave, which logs LLM traces and evaluations to the W&B platform for a team.
 bucket: project
-order: 14
+order: 15
 draft: false
 ---
 

@@ -2,7 +2,7 @@
 title: evalctl and SWE-bench
 description: When to use evalctl, a local command-line check that scores what your agent did to your own repo, and when to use SWE-bench, a fixed public benchmark that measures how many curated GitHub issues an agent can resolve.
 bucket: project
-order: 16
+order: 17
 draft: false
 ---
 

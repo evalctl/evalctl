@@ -2,7 +2,7 @@
 title: evalctl and Letta Trajectory
 description: When to use evalctl, a local command-line check that runs your agent and scores what it did to a workspace, and when to use Letta's Trajectory, a token-efficient format for recording an agent's run so another agent can read it. Different layers, not rivals.
 bucket: project
-order: 19
+order: 20
 draft: false
 ---
 

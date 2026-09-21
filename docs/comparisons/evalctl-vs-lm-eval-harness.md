@@ -2,7 +2,7 @@
 title: evalctl and lm-evaluation-harness
 description: When to use evalctl, a local command-line check that scores what your agent did to a workspace, and when to use lm-evaluation-harness, the standard framework for measuring a language model's capability on fixed academic benchmarks.
 bucket: project
-order: 17
+order: 18
 draft: false
 ---
 
