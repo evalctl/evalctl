@@ -102,8 +102,12 @@ not where it is different.
 - [evalctl and TruLens](/docs/comparisons/evalctl-vs-trulens/) — scoring what an
   agent did to a workspace, next to scoring an application's generated text with
   local feedback functions.
-
-More comparisons are in progress: public benchmarks.
+- [evalctl and SWE-bench](/docs/comparisons/evalctl-vs-swe-bench/) — a reusable
+  gate on your own repo, next to a fixed public benchmark that scores agents on
+  curated GitHub issues with their own tests.
+- [evalctl and lm-evaluation-harness](/docs/comparisons/evalctl-vs-lm-eval-harness/)
+  — scoring what an agent did to a workspace, next to measuring a model's
+  capability on fixed academic benchmarks.
 
 ## How to choose in one line
 
