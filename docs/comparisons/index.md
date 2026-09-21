@@ -90,8 +90,20 @@ not where it is different.
 - [evalctl and Braintrust](/docs/comparisons/evalctl-vs-braintrust/) — a local
   check pointed at your own repo, next to a hosted platform for dataset
   evaluations and comparable experiments.
+- [evalctl and Langfuse](/docs/comparisons/evalctl-vs-langfuse/) — a local check
+  that leaves a committable file, next to an open-source observability platform
+  that traces an application and evaluates it.
+- [evalctl and Arize Phoenix](/docs/comparisons/evalctl-vs-phoenix/) — a single
+  local command, next to an observability server that traces a run step by step
+  and scores its spans.
+- [evalctl and W&B Weave](/docs/comparisons/evalctl-vs-weave/) — scoring what an
+  agent did to a workspace, next to logging dataset evaluations and traces to the
+  Weights & Biases platform.
+- [evalctl and TruLens](/docs/comparisons/evalctl-vs-trulens/) — scoring what an
+  agent did to a workspace, next to scoring an application's generated text with
+  local feedback functions.
 
-More comparisons are in progress: public benchmarks and observability tools.
+More comparisons are in progress: public benchmarks.
 
 ## How to choose in one line
 
