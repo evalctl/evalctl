@@ -84,8 +84,14 @@ not where it is different.
   fixed check beats asking another model, and when a judge still earns its place.
 - [evalctl and GitHub Actions](/docs/comparisons/evalctl-vs-github-actions/) — how
   to turn an agent run into a pass/fail check with per-case detail in CI.
+- [evalctl and LangSmith](/docs/comparisons/evalctl-vs-langsmith/) — a local check
+  that leaves a committable file, next to a hosted platform for datasets, team
+  history, and production traces.
+- [evalctl and Braintrust](/docs/comparisons/evalctl-vs-braintrust/) — a local
+  check pointed at your own repo, next to a hosted platform for dataset
+  evaluations and comparable experiments.
 
-More comparisons are in progress: the main evaluation platforms.
+More comparisons are in progress: public benchmarks and observability tools.
 
 ## How to choose in one line
 
