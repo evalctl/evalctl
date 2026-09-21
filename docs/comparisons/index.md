@@ -39,9 +39,10 @@ underneath the heavier tools, not a replacement for them.
 Evaluation tools stack into three layers. Confusing one layer for another is the
 most common mistake, so it helps to name them.
 
-1. **Record what the agent did.** Trajectory formats such as Letta's Trajectory
-   write down an agent's steps in a standard shape. They don't run or score
-   anything.
+1. **Record what the agent did.** Trajectory formats such as
+   [Letta's Trajectory](/docs/comparisons/evalctl-vs-letta-trajectory/) and
+   [Harbor's ATIF](/docs/comparisons/evalctl-vs-harbor-atif/) write down an
+   agent's steps in a standard shape. They don't run or score anything.
 2. **Run the agent and score the result.** This is where evalctl sits. It drives
    the run and grades the outcome. A container-based harness like Harbor also
    lives here, scoring runs inside isolated sandboxes at scale.
@@ -108,6 +109,14 @@ not where it is different.
 - [evalctl and lm-evaluation-harness](/docs/comparisons/evalctl-vs-lm-eval-harness/)
   — scoring what an agent did to a workspace, next to measuring a model's
   capability on fixed academic benchmarks.
+- [evalctl and Harbor ATIF](/docs/comparisons/evalctl-vs-harbor-atif/) — running
+  and scoring an agent, next to a JSON format that records an agent's run.
+- [evalctl and Letta Trajectory](/docs/comparisons/evalctl-vs-letta-trajectory/) —
+  running and scoring an agent, next to a token-efficient format that records a
+  run for another agent to read.
+- [evalctl and Guardrails](/docs/comparisons/evalctl-vs-guardrails/) — an offline
+  gate on what an agent did, next to Guardrails AI and NeMo Guardrails validating
+  an LLM's inputs and outputs live in the request path.
 
 ## How to choose in one line
 
